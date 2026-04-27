@@ -1,6 +1,7 @@
 # JCANVAS
 
-**WIP***
+***WIP***
+
 Simple software rendering library
 
 TODO:
