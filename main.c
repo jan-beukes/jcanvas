@@ -9,58 +9,58 @@
 #include <time.h>
 #include <stdlib.h>
 
-#define RESX 64
-#define RESY 64
+#define RESX 600
+#define RESY 600
 
-Canvas image;
+JC_Canvas canvas;
+JC_Model model;
 
-void draw(Canvas canvas)
+void draw(void)
 {
-    cv_fill(canvas, BLACK);
-    cv_blit_rect(canvas, image, 0, 0, canvas.width, canvas.height);
+    jc_fill(canvas, BLACK);
+    jc_model(canvas, model, RED);
+    for (int i = 0; i < model.vertex_count; i++) {
+        JC_Vec2 p = jc_canvas_coord(canvas, model.vertices[i].position);
+        jc_pixel(canvas, p.x, p.y, WHITE);
+    }
+}
 
-    int ax = 7, ay =  3;
-    int bx = 12, by = 37;
-    int cx = 62, cy = 53;
+void init(void)
+{
+    jc_create(&canvas, RESX, RESY);
 
-    cv_line(canvas, ax, ay, bx, by, BLUE);
-    cv_line(canvas, cx, cy, bx, by, GREEN);
-    cv_line(canvas, cx, cy, ax, ay, YELLOW);
-    cv_line(canvas, ax, ay, cx, cy, RED);
+    jc_load_obj(&model, "res/diablo3.obj");
 }
 
 int main(void)
 {
     RGFW_init();
     RGFW_monitor *monitor = RGFW_getPrimaryMonitor();
-    const int win_width = 8*RESX;
-    const int win_height = 8*RESY;
+    const int win_width = RESX;
+    const int win_height = RESY;
+    // TODO: is there any way to fix the flickering on resize when working with window surfaces on X11
     RGFW_window *window = RGFW_createWindow("Render", monitor->x, monitor->y,
-           win_width, win_height, RGFW_windowCenter);
+           win_width, win_height, RGFW_windowNoResize|RGFW_windowCenter);
     RGFW_window_setExitKey(window, RGFW_keyEscape);
 
-    Canvas canvas, win_canvas;
-    cv_create(&canvas, RESX, RESY);
-    cv_create(&win_canvas, win_width, win_height);
-
-    cv_load_ppm(&image, "image.ppm");
-
+    init();
+    JC_Canvas win_canvas;
+    jc_create(&win_canvas, win_width, win_height);
     RGFW_surface *surface = RGFW_createSurface((uint8_t*)win_canvas.pixels,
             win_canvas.width, win_canvas.height, RGFW_formatRGBA8);
 
     while (!RGFW_window_shouldClose(window)) {
         RGFW_pollEvents();
-        draw(canvas);
-        // scale to window
-        cv_blit_rect(win_canvas, canvas, 0, 0, win_canvas.width, win_canvas.height);
 
+        draw();
+        // scale to window
+        jc_blit_rect(win_canvas, canvas, 0, 0, win_canvas.width, win_canvas.height);
         RGFW_window_blitSurface(window, surface);
     }
-    cv_save_ppm(canvas, "slop.ppm");
 
-    cv_destroy(&canvas);
-    cv_destroy(&image);
-    cv_destroy(&win_canvas);
+    jc_destroy(&canvas);
+    jc_destroy(&win_canvas);
     RGFW_surface_free(surface);
     RGFW_window_close(window);
+    return 0;
 }

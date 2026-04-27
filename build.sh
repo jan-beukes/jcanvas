@@ -1,5 +1,5 @@
 cflags="-ggdb -Wall -Wextra"
-if [[ -n $WAYlAND ]]; then
+if [[ -n $WAYLAND ]]; then
     # on wayland we need to use wayland-scanner to generate the protocol sources and headers
     # from the xml files in ./wayland and then link with them
     sources=$(make -s -f wayland.mk sources)
