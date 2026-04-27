@@ -10,6 +10,7 @@
 #ifndef JCANVAS_H
 #define JCANVAS_H
 
+#include <math.h>
 #include <stdio.h>
 #include <ctype.h>
 #include <assert.h>
@@ -103,6 +104,7 @@ typedef struct {
 } JC_Model;
 
 #define JC_PIXEL(c, x, y) (c).pixels[y*(c).width + x]
+#define JC_IN_BOUNDS(c, x, y) (x >= 0 && x < (c).width && y >= 0 && y < (c).height)
 
 // Mr C++ don't mangle my function names
 #if defined(__cplusplus)
@@ -135,10 +137,17 @@ void jc_line(JC_Canvas canvas, int x1, int y1, int x2, int y2, JC_Color color);
 void jc_model(JC_Canvas canvas, JC_Model model, JC_Color color);
 void jc_model_wires(JC_Canvas canvas, JC_Model model, JC_Color color);
 
+JC_Vec3 jc_project(JC_Vec3 point);
 JC_Vec2 jc_canvas_coord(JC_Canvas, JC_Vec3 point);
 JC_Vec3 jc_vec3_transform(JC_Matrix a, JC_Vec3 v);
+
 JC_Matrix jc_matrix_identity(void);
 JC_Matrix jc_matrix_mul(JC_Matrix a, JC_Matrix b);
+
+JC_Matrix jc_matrix_translate(float x, float y, float z);
+JC_Matrix jc_matrix_rotatex(float angle);
+JC_Matrix jc_matrix_rotatey(float angle);
+JC_Matrix jc_matrix_rotatez(float angle);
 
 // converts a color stored in an integer to a color struct
 // 0xaa00aaff will be a purple color as the LSB end is assumed stores alpha
@@ -400,9 +409,9 @@ bool jc_load_obj(JC_Model *model, const char *path)
 void jc_clamp(JC_Canvas canvas, int *x, int *y)
 {
     int x_clamped = _MAX(*x, 0);
-    *x = _MIN(x_clamped, canvas.width);
+    *x = _MIN(x_clamped, canvas.width - 1);
     int y_clamped = _MAX(*y, 0);
-    *y = _MIN(y_clamped, canvas.height);
+    *y = _MIN(y_clamped, canvas.height - 1);
 }
 
 // TODO: look into different ways of alpha blending
@@ -461,6 +470,7 @@ void jc_fill(JC_Canvas canvas, JC_Color color)
 
 void jc_pixel(JC_Canvas canvas, int x, int y, JC_Color color)
 {
+    if (!JC_IN_BOUNDS(canvas, x, y)) return;
     JC_PIXEL(canvas, x, y) = color;
 }
 
@@ -496,8 +506,10 @@ void jc_line(JC_Canvas canvas, int x1, int y1, int x2, int y2, JC_Color color)
     for (int x = x1; x <= x2; ++x) {
         // since y is actually x in this case
         if (steep) {
+            if (!JC_IN_BOUNDS(canvas, y, x)) continue;
             JC_PIXEL(canvas, (int)y, x) = color;
         } else {
+            if (!JC_IN_BOUNDS(canvas, x, y)) continue;
             JC_PIXEL(canvas, x, (int)y) = color;
         }
         // accumulate dy
@@ -543,6 +555,14 @@ void jc_model_wires(JC_Canvas canvas, JC_Model model, JC_Color color)
 // Linear Algebra stuff
 //=====================
 
+// Perspective projection of point p which should be the point after any model and view
+// transformations
+JC_Vec3 jc_project(JC_Vec3 p) {
+    p.x /= p.z;
+    p.y /= p.z;
+    return p;
+}
+
 // Transform point from x: [-1, 1] to [0, width] and y: [-1, 1] to [height, 0]
 JC_Vec2 jc_canvas_coord(JC_Canvas canvas, JC_Vec3 point)
 {
@@ -578,12 +598,58 @@ JC_Matrix jc_matrix_identity(void)
 
 JC_Matrix jc_matrix_translate(float x, float y, float z)
 {
-    JC_Matrix m = jc_matrix_identity();
-    m.m14 = x;
-    m.m14 = y;
-    m.m14 = z;
+    JC_Matrix m = {
+        1.0f, 0.0f, 0.0f, x,
+        0.0f, 1.0f, 0.0f, y,
+        0.0f, 0.0f, 1.0f, z,
+        0.0f, 0.0f, 0.0f, 1.0f,
+    };
     return m;
 }
+
+// TODO: rotate around any axis
+JC_Matrix jc_matrix_rotatex(float angle)
+{
+    JC_Matrix m = jc_matrix_identity();
+    float c = cosf(angle);
+    float s = sinf(angle);
+
+    m.m22 = c;
+    m.m32 = s;
+    m.m23 = -s;
+    m.m33 = c;
+
+    return m;
+}
+
+JC_Matrix jc_matrix_rotatey(float angle)
+{
+    JC_Matrix m = jc_matrix_identity();
+    float c = cosf(angle);
+    float s = sinf(angle);
+
+    m.m11 = c;
+    m.m13 = s;
+    m.m31 = -s;
+    m.m33 = c;
+
+    return m;
+}
+
+JC_Matrix jc_matrix_rotatez(float angle)
+{
+    JC_Matrix m = jc_matrix_identity();
+    float c = cosf(angle);
+    float s = sinf(angle);
+
+    m.m11 = c;
+    m.m21 = s;
+    m.m12 = -s;
+    m.m22 = c;
+
+    return m;
+}
+
 
 JC_Matrix jc_matrix_mul(JC_Matrix a, JC_Matrix b)
 {

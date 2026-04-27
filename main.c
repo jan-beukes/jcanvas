@@ -15,12 +15,16 @@
 JC_Canvas canvas;
 JC_Model model;
 
+float theta = 0;
 void draw(void)
 {
+    theta += 0.02f;
+    model.transform = jc_matrix_rotatey(theta);
     jc_fill(canvas, BLACK);
     jc_model(canvas, model, RED);
     for (int i = 0; i < model.vertex_count; i++) {
-        JC_Vec2 p = jc_canvas_coord(canvas, model.vertices[i].position);
+        JC_Vec3 pos = jc_vec3_transform(model.transform, model.vertices[i].position);
+        JC_Vec2 p = jc_canvas_coord(canvas, pos);
         jc_pixel(canvas, p.x, p.y, WHITE);
     }
 }
@@ -28,8 +32,8 @@ void draw(void)
 void init(void)
 {
     jc_create(&canvas, RESX, RESY);
-
     jc_load_obj(&model, "res/diablo3.obj");
+    model.transform = jc_matrix_translate(0, 0, 1);
 }
 
 int main(void)
@@ -49,13 +53,19 @@ int main(void)
     RGFW_surface *surface = RGFW_createSurface((uint8_t*)win_canvas.pixels,
             win_canvas.width, win_canvas.height, RGFW_formatRGBA8);
 
+    double frame_time = 1.0 / 60.0;
+    double prev_frame = 0.0;
     while (!RGFW_window_shouldClose(window)) {
-        RGFW_pollEvents();
+        double now = clock() / (double)CLOCKS_PER_SEC;
+        if (now - prev_frame > frame_time) {
+            prev_frame = now;
+            RGFW_pollEvents();
 
-        draw();
-        // scale to window
-        jc_blit_rect(win_canvas, canvas, 0, 0, win_canvas.width, win_canvas.height);
-        RGFW_window_blitSurface(window, surface);
+            draw();
+            // scale to window
+            jc_blit_rect(win_canvas, canvas, 0, 0, win_canvas.width, win_canvas.height);
+            RGFW_window_blitSurface(window, surface);
+        }
     }
 
     jc_destroy(&canvas);
