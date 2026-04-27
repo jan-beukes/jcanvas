@@ -24,13 +24,10 @@ typedef struct {
 } JC_Color;
 
 // NOTE: This is taken from raylib https://github.com/raysan5/raylib
-// MSVC C++ compiler does not support compound literals (C99 feature)
-// Plain structures in C++ (without constructors) can be initialized with { }
-// This is called aggregate initialization (C++11 feature)
 #if defined(__cplusplus)
-    #define CLITERAL(type)      type
+    #define CLITERAL(type) type
 #else
-    #define CLITERAL(type)      (type)
+    #define CLITERAL(type) (type)
 #endif
 #define LIGHTGRAY  CLITERAL(JC_Color){ 200, 200, 200, 255 }
 #define GRAY       CLITERAL(JC_Color){ 130, 130, 130, 255 }
@@ -100,7 +97,7 @@ typedef struct {
     JC_Matrix transform;
 
     JC_Color diffuse;
-    JC_Canvas texture;
+    JC_Image texture;
 } JC_Model;
 
 #define JC_PIXEL(c, x, y) (c).pixels[y*(c).width + x]
@@ -115,8 +112,8 @@ bool jc_create(JC_Canvas *canvas, int width, int height);
 void jc_destroy(JC_Canvas *canvas);
 void jc_resize(JC_Canvas *canvas, int w, int h);
 
-bool jc_load_ppm(JC_Image *canvas, const char *path);
-bool jc_save_ppm(JC_Image canvas, const char *path);
+bool jc_load_ppm(JC_Image *image, const char *path);
+bool jc_save_ppm(JC_Image image, const char *path);
 
 // load a model from obj data
 bool jc_load_obj(JC_Model *model, const char *path);
@@ -231,7 +228,7 @@ char *_read_entire_file(const char *path, long *size)
 }
 
 // load a ppm file
-bool jc_load_ppm(JC_Canvas *canvas, const char *path)
+bool jc_load_ppm(JC_Canvas *image, const char *path)
 {
     long size;
     char *data = _read_entire_file(path, &size);
@@ -263,9 +260,9 @@ bool jc_load_ppm(JC_Canvas *canvas, const char *path)
     while (isspace(*b)) b++;
     assert(maxval == 255);
 
-    canvas->width = width;
-    canvas->height = height;
-    canvas->pixels = malloc(width*height*sizeof(JC_Color));
+    image->width = width;
+    image->height = height;
+    image->pixels = malloc(width*height*sizeof(JC_Color));
 
     // parse pixels
     assert(size - (b - data) == 3*width*height);
@@ -277,22 +274,22 @@ bool jc_load_ppm(JC_Canvas *canvas, const char *path)
             .b = image_pixels[3*i + 2],
             .a = 255,
         };
-        canvas->pixels[i] = c;
+        image->pixels[i] = c;
     }
     free(data);
     return true;
 }
 
-bool jc_save_ppm(JC_Canvas canvas, const char *path)
+bool jc_save_ppm(JC_Canvas image, const char *path)
 {
     FILE *f = fopen(path, "wb");
     if (f == NULL) {
         return false;
     }
     fprintf(f, "P6\n");
-    fprintf(f, "%d %d\n%d\n", canvas.width, canvas.height, 255);
-    for (int i = 0; i < canvas.width*canvas.height; i++) {
-        JC_Color color = canvas.pixels[i];
+    fprintf(f, "%d %d\n%d\n", image.width, image.height, 255);
+    for (int i = 0; i < image.width*image.height; i++) {
+        JC_Color color = image.pixels[i];
         uint8_t c[3] = { color.r, color.g, color.b };
         fwrite(c, sizeof(c), 1, f);
     }
@@ -417,6 +414,7 @@ void jc_clamp(JC_Canvas canvas, int *x, int *y)
 // TODO: look into different ways of alpha blending
 void jc_blit(JC_Canvas canvas, JC_Image image, int x, int y)
 {
+    if (!JC_IN_BOUNDS(canvas, x, y) && !JC_IN_BOUNDS(canvas, x+image.width, y+image.height)) return;
     if (x == 0 && y == 0 && canvas.width == image.width && canvas.height == image.height) {
         memcpy(canvas.pixels, image.pixels, canvas.width*canvas.height*sizeof(JC_Color));
         return;
@@ -438,6 +436,7 @@ void jc_blit(JC_Canvas canvas, JC_Image image, int x, int y)
 // TODO: Add interpolation option
 void jc_blit_rect(JC_Canvas canvas, JC_Image image, int x, int y, int w, int h)
 {
+    if (!JC_IN_BOUNDS(canvas, x, y) && !JC_IN_BOUNDS(canvas, x+w, y+h)) return;
     if (w == (int)image.width && h == (int)image.height) {
         jc_blit(canvas, image, x, y);
         return;
@@ -476,6 +475,8 @@ void jc_pixel(JC_Canvas canvas, int x, int y, JC_Color color)
 
 void jc_rect(JC_Canvas canvas, int x, int y, int w, int h, JC_Color color)
 {
+    if (!JC_IN_BOUNDS(canvas, x, y) && !JC_IN_BOUNDS(canvas, x+w, y+h)) return;
+
     int x_max = x + w;
     int y_max = y + h;
     jc_clamp(canvas, &x, &y);
@@ -489,6 +490,7 @@ void jc_rect(JC_Canvas canvas, int x, int y, int w, int h, JC_Color color)
 
 void jc_line(JC_Canvas canvas, int x1, int y1, int x2, int y2, JC_Color color)
 {
+    if (!JC_IN_BOUNDS(canvas, x1, y1) && !JC_IN_BOUNDS(canvas, x2, y2)) return;
     // if steep we swap x and y to iterate over y
     bool steep = _ABS(x1 - x2) < _ABS(y1 - y2);
     if (steep) {
@@ -501,15 +503,15 @@ void jc_line(JC_Canvas canvas, int x1, int y1, int x2, int y2, JC_Color color)
         _SWAP(y1, y2);
     }
 
+    jc_clamp(canvas, &x1, &y1);
+    jc_clamp(canvas, &x2, &y2);
     float y = y1;
     float dy = (float)(y2-y1) / (x2-x1);
     for (int x = x1; x <= x2; ++x) {
         // since y is actually x in this case
         if (steep) {
-            if (!JC_IN_BOUNDS(canvas, y, x)) continue;
             JC_PIXEL(canvas, (int)y, x) = color;
         } else {
-            if (!JC_IN_BOUNDS(canvas, x, y)) continue;
             JC_PIXEL(canvas, x, (int)y) = color;
         }
         // accumulate dy

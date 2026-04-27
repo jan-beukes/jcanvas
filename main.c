@@ -16,10 +16,13 @@ JC_Canvas canvas;
 JC_Model model;
 
 float theta = 0;
+float x = 0;
 void draw(void)
 {
     theta += 0.02f;
+    x += 0.01;
     model.transform = jc_matrix_rotatey(theta);
+    model.transform = jc_matrix_mul(model.transform, jc_matrix_translate(x, 0, 0));
     jc_fill(canvas, BLACK);
     jc_model(canvas, model, RED);
     for (int i = 0; i < model.vertex_count; i++) {
