@@ -1,0 +1,4 @@
+main
+*.ppm
+wayland/*.c
+wayland/*.h
