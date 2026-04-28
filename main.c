@@ -7,26 +7,27 @@
 
 #define FRAME_TIME (1.0 / 60.0)
 
-#define RES 400
+#define RES 600
 
 SDL_Window *window;
 SDL_Surface *window_surface;
 
 Canvas canvas;
+float *zbuffer;
 SDL_Surface *canvas_surface;
 Model model;
 
 void test_model_lines(void)
 {
     static float theta = 0;
-    theta += 0.01f;
+    theta += 0.02f;
     model.transform = jc_matrix_rotate_y(theta);
 
-    draw_model(canvas, model, RED);
+    draw_model_wires(canvas, model, RED);
     for (int i = 0; i < model.vertex_count; i++) {
         Vec3 pos = vec3_transform(model.transform, model.vertices[i].position);
-        Vec2 p = canvas_coord(canvas, pos);
-        draw_pixel(canvas, p.x, p.y, WHITE);
+        pos = project(canvas, pos);
+        draw_pixel(canvas, pos.x, pos.y, WHITE);
     }
 }
 
@@ -43,7 +44,7 @@ void test_model(void)
     theta += 0.02f;
     model.transform = jc_matrix_rotate_y(theta);
 
-    draw_model(canvas, model, RED);
+    draw_model(canvas, zbuffer, model, WHITE);
 }
 
 SDL_AppResult SDL_AppIterate(void *state)
@@ -52,6 +53,8 @@ SDL_AppResult SDL_AppIterate(void *state)
     double frame_time_start = (double)SDL_GetTicksNS()/SDL_NS_PER_SECOND;
 
     fill(canvas, BLACK);
+    memset(zbuffer, 0, canvas.width*canvas.height*sizeof(float));
+
     // test_model_lines();
     // test_triangle();
     test_model();
@@ -91,13 +94,18 @@ SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
     window_surface = SDL_GetWindowSurface(window);
 
     jc_create(&canvas, RES, RES);
+    zbuffer = calloc(canvas.width*canvas.height, sizeof(float));
     canvas_surface = SDL_CreateSurfaceFrom(canvas.width, canvas.height, SDL_PIXELFORMAT_RGBA32,
             canvas.pixels, canvas.width*sizeof(JC_Color));
 
     model_load(&model, "res/diablo3.obj");
     for (int i = 0; i < model.vertex_count / 3; i++) {
-        Color rcolor = { rand()%255, rand()%255, rand()%255, 255 };
+        Color rcolor = { 55+rand()%200, 50, 50, 255 };
         model.vertices[3*i].color = rcolor;
+        rcolor = (Color){ 50, 55+rand()%200, 50, 255 };
+        model.vertices[3*i+1].color = rcolor;
+        rcolor = (Color){ 50, 50, 55+rand()%200, 255 };
+        model.vertices[3*i+2].color = rcolor;
     }
     return SDL_APP_CONTINUE;
 }
