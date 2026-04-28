@@ -1,8 +1,3 @@
-#include <assert.h>
-#include <stdint.h>
-#include <time.h>
-#include <stdlib.h>
-
 #define JCANVAS_IMPLEMENTATION
 #include "jcanvas.h"
 
@@ -12,32 +7,44 @@
 
 #define FRAME_TIME (1.0 / 60.0)
 
-#define RESX 600
-#define RESY 600
+#define RES 160
 
 SDL_Window *window;
 SDL_Surface *window_surface;
 
-JC_Canvas canvas;
+Canvas canvas;
 SDL_Surface *canvas_surface;
-JC_Model model;
+Model model;
+
+void test_model_lines(void)
+{
+    static float theta = 0;
+    theta += 0.01f;
+    model.transform = jc_matrix_rotate_y(theta);
+
+    fill(canvas, BLACK);
+    draw_model(canvas, model, RED);
+    for (int i = 0; i < model.vertex_count; i++) {
+        Vec3 pos = vec3_transform(model.transform, model.vertices[i].position);
+        Vec2 p = canvas_coord(canvas, pos);
+        draw_pixel(canvas, p.x, p.y, WHITE);
+    }
+}
+
+void test_triangle(void)
+{
+    draw_triangle(canvas, 7, 45, 35, 100, 45,  60, RED);
+    draw_triangle(canvas, 120, 35, 90,   5, 45, 110, WHITE);
+    draw_triangle(canvas, 115, 83, 80,  90, 85, 120, GREEN);
+}
 
 SDL_AppResult SDL_AppIterate(void *state)
 {
     (void)state;
     double frame_time_start = (double)SDL_GetTicksNS()/SDL_NS_PER_SECOND;
 
-    static float theta = 0;
-    theta += 0.01f;
-    model.transform = jc_matrix_rotate_y(theta);
-
-    jc_fill(canvas, BLACK);
-    jc_model(canvas, model, RED);
-    for (int i = 0; i < model.vertex_count; i++) {
-        JC_Vec3 pos = jc_vec3_transform(model.transform, model.vertices[i].position);
-        JC_Vec2 p = jc_canvas_coord(canvas, pos);
-        jc_pixel(canvas, p.x, p.y, WHITE);
-    }
+    // test_model_lines();
+    test_triangle();
 
     SDL_BlitSurfaceScaled(canvas_surface, NULL, window_surface, NULL, 0);
     SDL_UpdateWindowSurface(window);
@@ -65,15 +72,15 @@ SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
 {
     (void)state, (void)argc, (void)argv;
 
-    window = SDL_CreateWindow("jcanvas", RESX, RESY, 0);
+    window = SDL_CreateWindow("jcanvas", 800, 800, 0);
     if (window == NULL) return SDL_APP_FAILURE;
     window_surface = SDL_GetWindowSurface(window);
 
-    jc_create(&canvas, RESX, RESY);
+    jc_create(&canvas, RES, RES);
     canvas_surface = SDL_CreateSurfaceFrom(canvas.width, canvas.height, SDL_PIXELFORMAT_RGBA32,
             canvas.pixels, canvas.width*sizeof(JC_Color));
 
-    jc_model_load(&model, "res/diablo3.obj");
+    model_load(&model, "res/diablo3.obj");
     return SDL_APP_CONTINUE;
 }
 
@@ -81,5 +88,5 @@ void SDL_AppQuit(void *state, SDL_AppResult result)
 {
     (void)result, (void)state;
     jc_destroy(&canvas);
-    jc_model_destroy(&model);
+    model_destroy(&model);
 }

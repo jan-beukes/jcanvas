@@ -1,11 +1,14 @@
 // jcanvas is a simple software rendering library for drawing into a pixel buffer
 // Most of the rendering techniques were learned from https://haqr.eu/tinyrenderer
-// Raylib source code was also used as a reference for things such as the Matrix functions
-
+// Raylib source code was also used as a reference for many different things
+//
 // This is an STB style single header library.
 // One of your source files must define JCANVAS_IMPLEMENTATION before this header is included.
 // This will include all of the implementation into that source file
 // Otherwise the header can be included as normal everywhere else in your program
+//
+// By default the prefix is stripped from the types and most functions. See the bottom of this file for more information.
+// The prefixes can be enabled by defining JC_PREFIX before you include this file. This is needed
 
 #ifndef JCANVAS_H
 #define JCANVAS_H
@@ -15,6 +18,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
 #include <ctype.h>
 #include <assert.h>
 
@@ -87,6 +92,7 @@ typedef struct {
     JC_Vec3 position;
     JC_Vec3 texcoord;
     JC_Vec3 normal;
+    JC_Color color;
 } JC_Vertex;
 
 // TODO: make da camera
@@ -100,9 +106,16 @@ typedef struct {
     int vertex_count;
     JC_Matrix transform;
 
-    JC_Color diffuse;
+    // This is what will be applied when no shader func is set
+    // If you want to do something more advanced set the shader func
+    // and pass uniforms to sample textures
     JC_Image texture;
 } JC_Model;
+
+// This is a "shader" that is called for every pixel during rasterization
+// input will hold the interpolated values of the vertices given to the rasterize function
+// If no texture is given to the rasterize function it will be NULL
+typedef JC_Color (*JC_ShaderFunc)(JC_Vertex input, JC_Image *texture, void *uniforms);
 
 #define JC_PIXEL(c, x, y) (c).pixels[y*(c).width + x]
 #define JC_IN_BOUNDS(c, x, y) (x >= 0 && x < (c).width && y >= 0 && y < (c).height)
@@ -122,6 +135,9 @@ void jc_resize(JC_Canvas *canvas, int w, int h);
 bool jc_load_ppm(JC_Image *image, const char *path);
 bool jc_save_ppm(JC_Image image, const char *path);
 
+// TODO: add QOI https://github.com/phoboslab/qoi/blob/master/qoi.h
+// load_qoi load_qoi_from_memory and save_qoi
+
 // This is for the obj format!
 // Similarly to image loading the Model object is not very complicated and you can easily use some
 // other library to load a model and then convert the vertices to JC_Vertex (or just convert to obj)
@@ -129,20 +145,35 @@ bool jc_model_load(JC_Model *model, const char *path);
 bool jc_model_load_from_memory(JC_Model *model, char *data, long size);
 void jc_model_destroy(JC_Model *model);
 
+// clamps x and y to the canvas
+void jc_clamp(JC_Canvas canvas, int *x, int *y);
+
 // These functions are used to draw another canvas/image to a canvas
 void jc_blit(JC_Canvas canvas, JC_Image image, int x, int y);
 // Like cv_blit but it scales the image so that it occupies the rectangle (x, y, w, h)
 void jc_blit_rect(JC_Canvas canvas, JC_Image image, int x, int y, int w, int h);
+
+// TODO: vector argument functions?
 void jc_fill(JC_Canvas canvas, JC_Color color);
-void jc_pixel(JC_Canvas canvas, int x, int y, JC_Color color);
-void jc_rect(JC_Canvas canvas, int x, int y, int w, int h, JC_Color color);
-void jc_line(JC_Canvas canvas, int x1, int y1, int x2, int y2, JC_Color color);
+void jc_draw_pixel(JC_Canvas canvas, int x, int y, JC_Color color);
+void jc_draw_rect(JC_Canvas canvas, int x, int y, int w, int h, JC_Color color);
+void jc_draw_line(JC_Canvas canvas, int ax, int ay, int bx, int by, JC_Color color);
+void jc_draw_triangle(JC_Canvas canvas, int ax, int ay, int bx, int by, int cx, int cy, JC_Color color);
 
-void jc_model(JC_Canvas canvas, JC_Model model, JC_Color color);
-void jc_model_wires(JC_Canvas canvas, JC_Model model, JC_Color color);
+// The shader func is only called in the rasterize functions
+void jc_set_shader_func(JC_ShaderFunc func, void *uniforms);
+void jc_unset_shader_func(void);
+void jc_rasterize_triangle(JC_Canvas canvas, JC_Vertex v1, JC_Vertex v2, JC_Vertex v3);
+void jc_rasterize_triangle_ex(JC_Canvas canvas, JC_Vertex v1, JC_Vertex v2, JC_Vertex v3, JC_Image texture, JC_Color color);
 
-// clamps x and y to the canvas
-void jc_clamp(JC_Canvas canvas, int *x, int *y);
+void jc_draw_model(JC_Canvas canvas, JC_Model model, JC_Color color);
+void jc_draw_model_wires(JC_Canvas canvas, JC_Model model, JC_Color color);
+
+// converts a color stored in an integer to a color struct
+// 0xaa00aaff will be a purple color as the LSB end is assumed stores alpha
+JC_Color jc_color_from_int(uint32_t color);
+JC_Color jc_color_blend_alpha(JC_Color a, JC_Color b);
+JC_Color jc_color_mul(JC_Color a, JC_Color b);
 
 //---Linear algebra functions---
 JC_Vec3 jc_project(JC_Vec3 point);
@@ -156,7 +187,6 @@ JC_Vec3 jc_vec3_cross(JC_Vec3 a, JC_Vec3 b);
 float jc_vec3_dot(JC_Vec3 a, JC_Vec3 b);
 float jc_vec3_length(JC_Vec3 v);
 
-
 JC_Matrix jc_matrix_identity(void);
 
 JC_Matrix jc_matrix_translate(float x, float y, float z);
@@ -169,11 +199,6 @@ JC_Matrix jc_matrix_add(JC_Matrix a, JC_Matrix b);
 JC_Matrix jc_matrix_sub(JC_Matrix a, JC_Matrix b);
 JC_Matrix jc_matrix_mul(JC_Matrix a, JC_Matrix b);
 
-// converts a color stored in an integer to a color struct
-// 0xaa00aaff will be a purple color as the LSB end is assumed stores alpha
-JC_Color jc_color_from_int(uint32_t color);
-JC_Color jc_color_blend_alpha(JC_Color a, JC_Color b);
-
 #if defined(__cplusplus)
 }
 #endif
@@ -183,12 +208,19 @@ JC_Color jc_color_blend_alpha(JC_Color a, JC_Color b);
 // IMPLEMENTATION
 //======================================
 
-// TODO: maybe make these part of the API?
-#define _MIN(x, y) ((x) < (y) ? (x) : (y))
-#define _MAX(x, y) ((x) > (y) ? (x) : (y))
-#define _SWAP(x, y) do { x ^= y; y ^= x; x ^= y; } while(0)
-#define _ABS(x) ((x) > 0 ? (x) : -(x))
+static JC_ShaderFunc jc_active_shader_func = NULL;
+static void *jc_active_shader_uniforms = NULL;
 
+// TODO: maybe make these part of the API?
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+#define MAX(x, y) ((x) > (y) ? (x) : (y))
+#define SWAP(x, y) do { \
+    __typeof__(x) tmp = x; \
+    x = y; \
+    y = tmp; \
+} while(0)
+
+#define ABS(x) ((x) > 0 ? (x) : -(x))
 #define da_append(da, item) \
 do { \
     if ((da)->capacity == 0) { \
@@ -327,6 +359,7 @@ struct vec3_array {
     int count;
     int capacity;
 };
+
 struct vertex_array {
     JC_Vertex *items;
     int count;
@@ -371,6 +404,7 @@ bool jc_model_load_from_memory(JC_Model *model, char *data, long size)
         } else if (strcmp(type, "f") == 0) {
             int v, vt, vn;
             JC_Vertex vertex;
+            vertex.color = WHITE;
             for (int i = 0; i < 3; i++) {
                 char *end;
                 // vertex
@@ -393,10 +427,7 @@ bool jc_model_load_from_memory(JC_Model *model, char *data, long size)
                 vn = strtol(s, &end, 0);
                 vertex.normal = normals.items[vn];
                 s = end + 1;
-                if (*end != '/') {
-                    da_append(&vertices, vertex);
-                    continue;
-                }
+                da_append(&vertices, vertex);
             }
         } else {
             // TODO: handle other things https://en.wikipedia.org/wiki/Wavefront_.obj_file
@@ -410,7 +441,6 @@ bool jc_model_load_from_memory(JC_Model *model, char *data, long size)
     model->vertex_count = vertices.count;
     model->vertices = realloc(vertices.items, model->vertex_count * sizeof(JC_Vertex));
     model->transform = jc_matrix_identity();
-    model->diffuse = WHITE;
     return true;
 }
 
@@ -431,16 +461,15 @@ void jc_model_destroy(JC_Model *model)
     jc_destroy(&model->texture);
 }
 
-//===============
+//=================
 // Rendering
-//===============
-
+//=================
 void jc_clamp(JC_Canvas canvas, int *x, int *y)
 {
-    int x_clamped = _MAX(*x, 0);
-    *x = _MIN(x_clamped, canvas.width - 1);
-    int y_clamped = _MAX(*y, 0);
-    *y = _MIN(y_clamped, canvas.height - 1);
+    int x_clamped = MAX(*x, 0);
+    *x = MIN(x_clamped, canvas.width - 1);
+    int y_clamped = MAX(*y, 0);
+    *y = MIN(y_clamped, canvas.height - 1);
 }
 
 // TODO: look into different ways of blending (https://wiki.libsdl.org/SDL3/SDL_BlendMode)
@@ -499,13 +528,13 @@ void jc_fill(JC_Canvas canvas, JC_Color color)
     }
 }
 
-void jc_pixel(JC_Canvas canvas, int x, int y, JC_Color color)
+void jc_draw_pixel(JC_Canvas canvas, int x, int y, JC_Color color)
 {
     if (!JC_IN_BOUNDS(canvas, x, y)) return;
     JC_PIXEL(canvas, x, y) = color;
 }
 
-void jc_rect(JC_Canvas canvas, int x, int y, int w, int h, JC_Color color)
+void jc_draw_rect(JC_Canvas canvas, int x, int y, int w, int h, JC_Color color)
 {
     if (!JC_IN_BOUNDS(canvas, x, y) && !JC_IN_BOUNDS(canvas, x+w, y+h)) return;
 
@@ -520,26 +549,26 @@ void jc_rect(JC_Canvas canvas, int x, int y, int w, int h, JC_Color color)
     }
 }
 
-void jc_line(JC_Canvas canvas, int x1, int y1, int x2, int y2, JC_Color color)
+void jc_draw_line(JC_Canvas canvas, int ax, int ay, int bx, int by, JC_Color color)
 {
-    if (!JC_IN_BOUNDS(canvas, x1, y1) && !JC_IN_BOUNDS(canvas, x2, y2)) return;
+    if (!JC_IN_BOUNDS(canvas, ax, ay) && !JC_IN_BOUNDS(canvas, bx, by)) return;
     // if steep we swap x and y to iterate over y
-    bool steep = _ABS(x1 - x2) < _ABS(y1 - y2);
+    bool steep = ABS(ax - bx) < ABS(ay - by);
     if (steep) {
-        _SWAP(x1, y1);
-        _SWAP(x2, y2);
+        SWAP(ax, ay);
+        SWAP(bx, by);
     }
-    // make sure that x1 is the smallest of the points
-    if (x1 > x2) {
-        _SWAP(x1, x2);
-        _SWAP(y1, y2);
+    // make sure that ax is the smallest of the points
+    if (ax > bx) {
+        SWAP(ax, bx);
+        SWAP(ay, by);
     }
 
-    jc_clamp(canvas, &x1, &y1);
-    jc_clamp(canvas, &x2, &y2);
-    float y = y1;
-    float dy = (float)(y2-y1) / (x2-x1);
-    for (int x = x1; x <= x2; ++x) {
+    jc_clamp(canvas, &ax, &ay);
+    jc_clamp(canvas, &bx, &by);
+    float y = ay;
+    float dy = (float)(by-ay) / (bx-ax);
+    for (int x = ax; x <= bx; ++x) {
         // since y is actually x in this case
         if (steep) {
             JC_PIXEL(canvas, (int)y, x) = color;
@@ -551,17 +580,70 @@ void jc_line(JC_Canvas canvas, int x1, int y1, int x2, int y2, JC_Color color)
     }
 }
 
-//==================
-// 3D Rendering
-//=================
-
-void jc_model(JC_Canvas canvas, JC_Model model, JC_Color color)
+void jc_draw_triangle(JC_Canvas canvas, int ax, int ay, int bx, int by, int cx, int cy, JC_Color color)
 {
-    // TODO: implement
-    jc_model_wires(canvas, model, color);
+    // sort the vertices ascending
+    if (ay > by) { SWAP(ax, bx); SWAP(ay, by); }
+    if (ay > cy) { SWAP(ax, cx); SWAP(ay, cy); }
+    if (by > cy) { SWAP(bx, cx); SWAP(by, cy); }
+
+    int total_height = cy - ay;
+    // if they are on same vertical then there is no lower / upper half
+    if (ay != by) {
+        int segment_height = by - ay;
+        // sweep horizontal line
+        for (int y = ay; y <= by; y++) {
+            int x1 = ax + ((cx - ax)*(y - ay)) / total_height;
+            int x2 = ax + ((bx - ax)*(y - ay)) / segment_height;
+            int xmin = MIN(x1, x2), xmax = MAX(x1, x2);
+            for (int x = xmin; x < xmax; x++) {
+                JC_PIXEL(canvas, x, y) = color;
+            }
+        }
+    }
+    if (by != cy) {
+        int segment_height = cy - by;
+        // sweep horizontal line
+        for (int y = by; y <= cy; y++) {
+            int x1 = ax + ((cx - ax)*(y - ay)) / total_height;
+            int x2 = bx + ((cx - bx)*(y - by)) / segment_height;
+            int xmin = MIN(x1, x2), xmax = MAX(x1, x2);
+            for (int x = xmin; x < xmax; x++) {
+                JC_PIXEL(canvas, x, y) = color;
+            }
+        }
+    }
 }
 
-void jc_model_wires(JC_Canvas canvas, JC_Model model, JC_Color color)
+void jc_set_shader_func(JC_ShaderFunc func, void *uniforms)
+{
+    jc_active_shader_func = func;
+    jc_active_shader_uniforms = uniforms;
+}
+
+void jc_unset_shader_func(void)
+{
+    jc_active_shader_func = NULL;
+    jc_active_shader_uniforms = NULL;
+}
+
+// void jc_rasterize_triangle(JC_Canvas canvas, JC_Vertex v1, JC_Vertex v2, JC_Vertex v3)
+// {
+// }
+//
+// void jc_rasterize_triangle_ex(JC_Canvas canvas, JC_Vertex v1, JC_Vertex v2, JC_Vertex v3, JC_Image texture,
+//         JC_Color color)
+// {
+// }
+
+void jc_draw_model(JC_Canvas canvas, JC_Model model, JC_Color color)
+{
+    // TODO: implement
+    jc_draw_model_wires(canvas, model, color);
+}
+
+// NOTE: This does not use any of the vertex colors or the model texture
+void jc_draw_model_wires(JC_Canvas canvas, JC_Model model, JC_Color color)
 {
     int triangle_count = model.vertex_count / 3;
     for (int i = 0; i < triangle_count; i++) {
@@ -579,9 +661,9 @@ void jc_model_wires(JC_Canvas canvas, JC_Model model, JC_Color color)
         JC_Vec2 cp2 = jc_canvas_coord(canvas, p2);
         JC_Vec2 cp3 = jc_canvas_coord(canvas, p3);
 
-        jc_line(canvas, cp1.x, cp1.y, cp2.x, cp2.y, color);
-        jc_line(canvas, cp2.x, cp2.y, cp3.x, cp3.y, color);
-        jc_line(canvas, cp3.x, cp3.y, cp1.x, cp1.y, color);
+        jc_draw_line(canvas, cp1.x, cp1.y, cp2.x, cp2.y, color);
+        jc_draw_line(canvas, cp2.x, cp2.y, cp3.x, cp3.y, color);
+        jc_draw_line(canvas, cp3.x, cp3.y, cp1.x, cp1.y, color);
     }
 }
 
@@ -597,6 +679,17 @@ JC_Color jc_color_blend_alpha(JC_Color ca, JC_Color cb)
     if (g > 255) g = 255;
     if (b > 255) b = 255;
     JC_Color c = { r, g, b, ca.a };
+    return c;
+}
+
+JC_Color jc_color_mul(JC_Color ca, JC_Color cb)
+{
+    JC_Color c = {
+        (uint32_t)ca.r * cb.r / 255,
+        (uint32_t)ca.g * cb.g / 255,
+        (uint32_t)ca.b * cb.b / 255,
+        (uint32_t)ca.a * cb.a / 255,
+    };
     return c;
 }
 
@@ -812,9 +905,62 @@ JC_Matrix jc_matrix_mul(JC_Matrix a, JC_Matrix b)
     m.m44 = a.m41*b.m14 + a.m42*b.m24 + a.m43*b.m34 + a.m44*b.m44;
     return m;
 }
+#undef MIN
+#undef MAX
+#undef SWAP
+#undef ABS
+#undef da_append
 
 #endif // JCANVAS_IMPLEMENTATION
 //======================================
+// Strip prefixes from types and functions. This idea is taken from https://github.com/tsoding/nob.h
+// NOTE: the exception is canvas related functions such as jc_create, jc_destroy, jc_resize
+#ifndef JC_PREFIX
+#define Canvas JC_Canvas
+#define Color JC_Color
+#define Camera JC_Camera
+#define Model JC_Model
+#define Vertex JC_Vertex
+#define Matrix JC_Matrix
+#define Vec3 JC_Vec3
+#define Vec2 JC_Vec2
+
+#define load_ppm jc_load_ppm
+#define save_ppm jc_save_ppm
+#define model_load jc_model_load
+#define model_load_from_memory jc_model_load_from_memory
+#define model_destroy jc_model_destroy
+#define blit jc_blit
+#define blit_rect jc_blit_rect
+#define fill jc_fill
+#define draw_pixel jc_draw_pixel
+#define draw_rect jc_draw_rect
+#define draw_line jc_draw_line
+#define draw_triangle jc_draw_triangle
+#define draw_model jc_draw_model
+#define draw_model_wires jc_draw_model_wires
+#define color_from_int jc_color_from_int
+#define color_blend_alpha jc_color_blend_alpha
+#define clamp jc_clamp
+#define project jc_project
+#define canvas_coord jc_canvas_coord
+#define vec3_add jc_vec3_add
+#define vec3_sub jc_vec3_sub
+#define vec3_transform jc_vec3_transform
+#define vec3_normalize jc_vec3_normalize
+#define vec3_cross jc_vec3_cross
+#define vec3_dot jc_vec3_dot
+#define vec3_length jc_vec3_length
+#define matrix_identity jc_matrix_identity
+#define matrix_translate jc_matrix_translate
+#define matrix_scale jc_matrix_scale
+#define matrix_rotate_x jc_matrix_rotate_x
+#define matrix_rotate_y jc_matrix_rotate_y
+#define matrix_rotate_z jc_matrix_rotate_z
+#define matrix_add jc_matrix_add
+#define matrix_sub jc_matrix_sub
+#define matrix_mul jc_matrix_mul
+#endif
 
 #endif // JCANVAS_H
 
