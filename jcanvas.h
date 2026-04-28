@@ -1,5 +1,5 @@
 // jcanvas is a simple software rendering library for drawing into a pixel buffer
-// Most of the rendering techniques were learned from https://haqr.eu/tinyrenderer
+// Most of the rendering techniques were learned from the amazing series https://haqr.eu/tinyrenderer
 // Raylib source code was also used as a reference for many different things
 //
 // This is an STB style single header library.
@@ -112,6 +112,7 @@ typedef struct {
     JC_Image texture;
 } JC_Model;
 
+// NOTE: Do not try to mutate uniforms in this function since this can be called by seperate threads when OpenMP is used.
 // This is a "shader" that is called for every pixel during rasterization
 // input will hold the interpolated values of the vertices given to the rasterize function
 // If no texture is given to the rasterize function it will be NULL
@@ -580,37 +581,37 @@ void jc_draw_line(JC_Canvas canvas, int ax, int ay, int bx, int by, JC_Color col
     }
 }
 
+double jc_signed_triangle_area(int ax, int ay, int bx, int by, int cx, int cy)
+{
+    return 0.5*((bx+ax)*(by-ay) + (cx+bx)*(cy-by) + (ax+cx)*(ay-cy));
+}
+
 void jc_draw_triangle(JC_Canvas canvas, int ax, int ay, int bx, int by, int cx, int cy, JC_Color color)
 {
-    // sort the vertices ascending
-    if (ay > by) { SWAP(ax, bx); SWAP(ay, by); }
-    if (ay > cy) { SWAP(ax, cx); SWAP(ay, cy); }
-    if (by > cy) { SWAP(bx, cx); SWAP(by, cy); }
+    int min_axbx = MIN(ax, bx);
+    int bb_minx  = MIN(min_axbx, cx);
+    int min_ayby = MIN(ay, by);
+    int bb_miny  = MIN(min_ayby, cy);
 
-    int total_height = cy - ay;
-    // if they are on same vertical then there is no lower / upper half
-    if (ay != by) {
-        int segment_height = by - ay;
-        // sweep horizontal line
-        for (int y = ay; y <= by; y++) {
-            int x1 = ax + ((cx - ax)*(y - ay)) / total_height;
-            int x2 = ax + ((bx - ax)*(y - ay)) / segment_height;
-            int xmin = MIN(x1, x2), xmax = MAX(x1, x2);
-            for (int x = xmin; x < xmax; x++) {
-                JC_PIXEL(canvas, x, y) = color;
-            }
-        }
-    }
-    if (by != cy) {
-        int segment_height = cy - by;
-        // sweep horizontal line
-        for (int y = by; y <= cy; y++) {
-            int x1 = ax + ((cx - ax)*(y - ay)) / total_height;
-            int x2 = bx + ((cx - bx)*(y - by)) / segment_height;
-            int xmin = MIN(x1, x2), xmax = MAX(x1, x2);
-            for (int x = xmin; x < xmax; x++) {
-                JC_PIXEL(canvas, x, y) = color;
-            }
+    int max_axbx = MAX(ax, bx);
+    int bb_maxx  = MAX(max_axbx, cx);
+    int max_ayby = MAX(ay, by);
+    int bb_maxy  = MAX(max_ayby, cy);
+    double total_area = jc_signed_triangle_area(ax, ay, bx, by, cx, cy);
+    if (total_area < 1) return;
+
+    for (int x = bb_minx; x <= bb_maxx; x++) {
+        for (int y = bb_miny; y <= bb_maxy; y++) {
+            // The barycentric coord is proportional to the area of the triangle
+            // made from P with the other two vertices. When the point is close
+            // to a vertex the area made with the other vertices will be larger
+            double alpha = jc_signed_triangle_area(x, y, bx, by, cx, cy) / total_area;
+            double beta  = jc_signed_triangle_area(x, y, cx, cy, ax, ay) / total_area;
+            double gamma = jc_signed_triangle_area(x, y, ax, ay, bx, by) / total_area;
+            // A negative coordinate means that the point is not in the triangle
+            if (alpha < 0 || beta < 0 || gamma < 0) continue;
+            if (x < 0 || x >= canvas.width || y < 0 || y >= canvas.height) continue;
+            JC_PIXEL(canvas, x, y) = color;
         }
     }
 }
@@ -638,8 +639,25 @@ void jc_unset_shader_func(void)
 
 void jc_draw_model(JC_Canvas canvas, JC_Model model, JC_Color color)
 {
-    // TODO: implement
-    jc_draw_model_wires(canvas, model, color);
+    int triangle_count = model.vertex_count / 3;
+    for (int i = 0; i < triangle_count; i++) {
+        JC_Vec3 v1 = model.vertices[3*i].position;
+        JC_Vec3 v2 = model.vertices[3*i + 1].position;
+        JC_Vec3 v3 = model.vertices[3*i + 2].position;
+
+        // model transform
+        v1 = jc_vec3_transform(model.transform, v1);
+        v2 = jc_vec3_transform(model.transform, v2);
+        v3 = jc_vec3_transform(model.transform, v3);
+
+        // project to canvas
+        JC_Vec2 p1 = jc_canvas_coord(canvas, v1);
+        JC_Vec2 p2 = jc_canvas_coord(canvas, v2);
+        JC_Vec2 p3 = jc_canvas_coord(canvas, v3);
+
+        color = model.vertices[3*i].color;
+        jc_draw_triangle(canvas, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y, color);
+    }
 }
 
 // NOTE: This does not use any of the vertex colors or the model texture

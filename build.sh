@@ -1,6 +1,6 @@
 # sdl_include="-I/usr/include"
 # sdl_lib="-L/usr/lib"
-cflags="-ggdb -Wall -Wextra"
+cflags="-ggdb -Wall -Wextra -O3"
 sdl="$sdl_include $sdl_lib -lSDL3"
 
 set -xe

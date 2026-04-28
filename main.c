@@ -7,7 +7,7 @@
 
 #define FRAME_TIME (1.0 / 60.0)
 
-#define RES 160
+#define RES 400
 
 SDL_Window *window;
 SDL_Surface *window_surface;
@@ -22,7 +22,6 @@ void test_model_lines(void)
     theta += 0.01f;
     model.transform = jc_matrix_rotate_y(theta);
 
-    fill(canvas, BLACK);
     draw_model(canvas, model, RED);
     for (int i = 0; i < model.vertex_count; i++) {
         Vec3 pos = vec3_transform(model.transform, model.vertices[i].position);
@@ -38,21 +37,36 @@ void test_triangle(void)
     draw_triangle(canvas, 115, 83, 80,  90, 85, 120, GREEN);
 }
 
+void test_model(void)
+{
+    static float theta = 0;
+    theta += 0.02f;
+    model.transform = jc_matrix_rotate_y(theta);
+
+    draw_model(canvas, model, RED);
+}
+
 SDL_AppResult SDL_AppIterate(void *state)
 {
     (void)state;
     double frame_time_start = (double)SDL_GetTicksNS()/SDL_NS_PER_SECOND;
 
+    fill(canvas, BLACK);
     // test_model_lines();
-    test_triangle();
+    // test_triangle();
+    test_model();
 
     SDL_BlitSurfaceScaled(canvas_surface, NULL, window_surface, NULL, 0);
     SDL_UpdateWindowSurface(window);
 
     // Limit fps
     double frame_time = ((double)SDL_GetTicksNS() / SDL_NS_PER_SECOND) - frame_time_start;
+    char buf[16];
+    sprintf(buf, "%.2fms", frame_time * 1000);
+    SDL_SetWindowTitle(window, buf);
     if (frame_time < FRAME_TIME) {
-        SDL_DelayNS(FRAME_TIME - frame_time);
+        double sleep_time = (FRAME_TIME - frame_time) * SDL_NS_PER_SECOND;
+        SDL_DelayNS(sleep_time);
     }
 
     return SDL_APP_CONTINUE;
@@ -81,6 +95,10 @@ SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
             canvas.pixels, canvas.width*sizeof(JC_Color));
 
     model_load(&model, "res/diablo3.obj");
+    for (int i = 0; i < model.vertex_count / 3; i++) {
+        Color rcolor = { rand()%255, rand()%255, rand()%255, 255 };
+        model.vertices[3*i].color = rcolor;
+    }
     return SDL_APP_CONTINUE;
 }
 
