@@ -1,14 +1,7 @@
+# sdl_include="-I/usr/include"
+# sdl_lib="-L/usr/lib"
 cflags="-ggdb -Wall -Wextra"
-if [[ -n $WAYLAND ]]; then
-    # on wayland we need to use wayland-scanner to generate the protocol sources and headers
-    # from the xml files in ./wayland and then link with them
-    sources=$(make -s -f wayland.mk sources)
-    make -s -f wayland.mk
+sdl="$sdl_include $sdl_lib -lSDL3"
 
-    libs=" $sources -lwayland-cursor -lwayland-client -lxkbcommon -lm"
-    cflags+=" -DRGFW_WAYLAND -I./wayland"
-else
-    libs="-lX11 -lXrandr -lm"
-fi
-
-cc -o main $cflags main.c $libs
+set -xe
+cc -o main $cflags main.c $sdl -lm

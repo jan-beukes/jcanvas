@@ -1,28 +1,36 @@
-#define RGFW_IMPLEMENTATION
-#include "RGFW.h"
-
-#define JCANVAS_IMPLEMENTATION
-#include "jcanvas.h"
-
 #include <assert.h>
 #include <stdint.h>
 #include <time.h>
 #include <stdlib.h>
 
+#define JCANVAS_IMPLEMENTATION
+#include "jcanvas.h"
+
+#include <SDL3/SDL.h>
+#define SDL_MAIN_USE_CALLBACKS
+#include <SDL3/SDL_main.h>
+
+#define FRAME_TIME (1.0 / 60.0)
+
 #define RESX 600
 #define RESY 600
 
+SDL_Window *window;
+SDL_Surface *window_surface;
+
 JC_Canvas canvas;
+SDL_Surface *canvas_surface;
 JC_Model model;
 
-float theta = 0;
-float x = 0;
-void draw(void)
+SDL_AppResult SDL_AppIterate(void *state)
 {
-    theta += 0.02f;
-    x += 0.01;
-    model.transform = jc_matrix_rotatey(theta);
-    model.transform = jc_matrix_mul(model.transform, jc_matrix_translate(x, 0, 0));
+    (void)state;
+    double frame_time_start = (double)SDL_GetTicksNS()/SDL_NS_PER_SECOND;
+
+    static float theta = 0;
+    theta += 0.01f;
+    model.transform = jc_matrix_rotate_y(theta);
+
     jc_fill(canvas, BLACK);
     jc_model(canvas, model, RED);
     for (int i = 0; i < model.vertex_count; i++) {
@@ -30,50 +38,48 @@ void draw(void)
         JC_Vec2 p = jc_canvas_coord(canvas, pos);
         jc_pixel(canvas, p.x, p.y, WHITE);
     }
-}
 
-void init(void)
-{
-    jc_create(&canvas, RESX, RESY);
-    jc_load_obj(&model, "res/diablo3.obj");
-    model.transform = jc_matrix_translate(0, 0, 1);
-}
+    SDL_BlitSurfaceScaled(canvas_surface, NULL, window_surface, NULL, 0);
+    SDL_UpdateWindowSurface(window);
 
-int main(void)
-{
-    RGFW_init();
-    RGFW_monitor *monitor = RGFW_getPrimaryMonitor();
-    const int win_width = RESX;
-    const int win_height = RESY;
-    // TODO: is there any way to fix the flickering on resize when working with window surfaces on X11
-    RGFW_window *window = RGFW_createWindow("Render", monitor->x, monitor->y,
-           win_width, win_height, RGFW_windowNoResize|RGFW_windowCenter);
-    RGFW_window_setExitKey(window, RGFW_keyEscape);
-
-    init();
-    JC_Canvas win_canvas;
-    jc_create(&win_canvas, win_width, win_height);
-    RGFW_surface *surface = RGFW_createSurface((uint8_t*)win_canvas.pixels,
-            win_canvas.width, win_canvas.height, RGFW_formatRGBA8);
-
-    double frame_time = 1.0 / 60.0;
-    double prev_frame = 0.0;
-    while (!RGFW_window_shouldClose(window)) {
-        double now = clock() / (double)CLOCKS_PER_SEC;
-        if (now - prev_frame > frame_time) {
-            prev_frame = now;
-            RGFW_pollEvents();
-
-            draw();
-            // scale to window
-            jc_blit_rect(win_canvas, canvas, 0, 0, win_canvas.width, win_canvas.height);
-            RGFW_window_blitSurface(window, surface);
-        }
+    // Limit fps
+    double frame_time = ((double)SDL_GetTicksNS() / SDL_NS_PER_SECOND) - frame_time_start;
+    if (frame_time < FRAME_TIME) {
+        SDL_DelayNS(FRAME_TIME - frame_time);
     }
 
+    return SDL_APP_CONTINUE;
+}
+
+SDL_AppResult SDL_AppEvent(void *state, SDL_Event *e)
+{
+    (void)state;
+
+    if (e->type == SDL_EVENT_QUIT) return SDL_APP_SUCCESS;
+    if (e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_ESCAPE) return SDL_APP_SUCCESS;
+
+    return SDL_APP_CONTINUE;
+}
+
+SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
+{
+    (void)state, (void)argc, (void)argv;
+
+    window = SDL_CreateWindow("jcanvas", RESX, RESY, 0);
+    if (window == NULL) return SDL_APP_FAILURE;
+    window_surface = SDL_GetWindowSurface(window);
+
+    jc_create(&canvas, RESX, RESY);
+    canvas_surface = SDL_CreateSurfaceFrom(canvas.width, canvas.height, SDL_PIXELFORMAT_RGBA32,
+            canvas.pixels, canvas.width*sizeof(JC_Color));
+
+    jc_model_load(&model, "res/diablo3.obj");
+    return SDL_APP_CONTINUE;
+}
+
+void SDL_AppQuit(void *state, SDL_AppResult result)
+{
+    (void)result, (void)state;
     jc_destroy(&canvas);
-    jc_destroy(&win_canvas);
-    RGFW_surface_free(surface);
-    RGFW_window_close(window);
-    return 0;
+    jc_model_destroy(&model);
 }

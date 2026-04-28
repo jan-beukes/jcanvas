@@ -10,8 +10,11 @@
 #ifndef JCANVAS_H
 #define JCANVAS_H
 
+// TODO: Customizable math functions, alloc functions and maybe assert?
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 #include <ctype.h>
 #include <assert.h>
 
@@ -56,6 +59,7 @@ typedef struct {
 #define MAGENTA    CLITERAL(JC_Color){ 255, 0, 255, 255 }
 
 // The main canvas/image structure in RGBA8 format
+// TODO: pitch for subcanvas ?
 typedef struct {
     int width, height;
     JC_Color *pixels;
@@ -112,20 +116,23 @@ bool jc_create(JC_Canvas *canvas, int width, int height);
 void jc_destroy(JC_Canvas *canvas);
 void jc_resize(JC_Canvas *canvas, int w, int h);
 
+// These are currently the only image loading functions provided
+// If you want to load an image then you can simply load the data using something like stb_image
+// and manually initialize the canvas pixels, width and height or use jc_create and fill the pixels
 bool jc_load_ppm(JC_Image *image, const char *path);
 bool jc_save_ppm(JC_Image image, const char *path);
 
-// load a model from obj data
-bool jc_load_obj(JC_Model *model, const char *path);
-bool jc_load_obj_from_memory(JC_Model *model, char *data);
+// This is for the obj format!
+// Similarly to image loading the Model object is not very complicated and you can easily use some
+// other library to load a model and then convert the vertices to JC_Vertex (or just convert to obj)
+bool jc_model_load(JC_Model *model, const char *path);
+bool jc_model_load_from_memory(JC_Model *model, char *data, long size);
+void jc_model_destroy(JC_Model *model);
 
-// clamps x and y to the canvas
-void jc_clamp(JC_Canvas canvas, int *x, int *y);
 // These functions are used to draw another canvas/image to a canvas
 void jc_blit(JC_Canvas canvas, JC_Image image, int x, int y);
 // Like cv_blit but it scales the image so that it occupies the rectangle (x, y, w, h)
 void jc_blit_rect(JC_Canvas canvas, JC_Image image, int x, int y, int w, int h);
-
 void jc_fill(JC_Canvas canvas, JC_Color color);
 void jc_pixel(JC_Canvas canvas, int x, int y, JC_Color color);
 void jc_rect(JC_Canvas canvas, int x, int y, int w, int h, JC_Color color);
@@ -134,17 +141,33 @@ void jc_line(JC_Canvas canvas, int x1, int y1, int x2, int y2, JC_Color color);
 void jc_model(JC_Canvas canvas, JC_Model model, JC_Color color);
 void jc_model_wires(JC_Canvas canvas, JC_Model model, JC_Color color);
 
+// clamps x and y to the canvas
+void jc_clamp(JC_Canvas canvas, int *x, int *y);
+
+//---Linear algebra functions---
 JC_Vec3 jc_project(JC_Vec3 point);
 JC_Vec2 jc_canvas_coord(JC_Canvas, JC_Vec3 point);
+
+JC_Vec3 jc_vec3_add(JC_Vec3 a, JC_Vec3 b);
+JC_Vec3 jc_vec3_sub(JC_Vec3 a, JC_Vec3 b);
 JC_Vec3 jc_vec3_transform(JC_Matrix a, JC_Vec3 v);
+JC_Vec3 jc_vec3_normalize(JC_Vec3 v);
+JC_Vec3 jc_vec3_cross(JC_Vec3 a, JC_Vec3 b);
+float jc_vec3_dot(JC_Vec3 a, JC_Vec3 b);
+float jc_vec3_length(JC_Vec3 v);
+
 
 JC_Matrix jc_matrix_identity(void);
-JC_Matrix jc_matrix_mul(JC_Matrix a, JC_Matrix b);
 
 JC_Matrix jc_matrix_translate(float x, float y, float z);
-JC_Matrix jc_matrix_rotatex(float angle);
-JC_Matrix jc_matrix_rotatey(float angle);
-JC_Matrix jc_matrix_rotatez(float angle);
+JC_Matrix jc_matrix_scale(float s);
+JC_Matrix jc_matrix_rotate_x(float angle);
+JC_Matrix jc_matrix_rotate_y(float angle);
+JC_Matrix jc_matrix_rotate_z(float angle);
+
+JC_Matrix jc_matrix_add(JC_Matrix a, JC_Matrix b);
+JC_Matrix jc_matrix_sub(JC_Matrix a, JC_Matrix b);
+JC_Matrix jc_matrix_mul(JC_Matrix a, JC_Matrix b);
 
 // converts a color stored in an integer to a color struct
 // 0xaa00aaff will be a purple color as the LSB end is assumed stores alpha
@@ -218,10 +241,11 @@ char *_read_entire_file(const char *path, long *size)
     if (fseek(file, 0, SEEK_END) < 0) return NULL;
     if ((file_size = ftell(file)) < 0) return NULL;
     if (fseek(file, 0, SEEK_SET) < 0) return NULL;
-    char *buf = malloc(file_size);
+    char *buf = malloc(file_size + 1);
     if (buf == NULL) return NULL;
     fread(buf, file_size, 1, file);
     if (size) *size = file_size;
+    buf[file_size-1] = '\0';
 
     fclose(file);
     return buf;
@@ -237,7 +261,7 @@ bool jc_load_ppm(JC_Canvas *image, const char *path)
     char *b = data;
     if (*b++ != 'P' || *b++ != '6') return false;
     // skip space;
-    while (isspace(*b)) b++;
+    while (b && isspace(*b)) b++;
 
     char *endptr;
     int width, height, maxval;
@@ -245,19 +269,19 @@ bool jc_load_ppm(JC_Canvas *image, const char *path)
     width = strtol(b, &endptr, 0);
     if (endptr == b) return false;
     b = endptr;
-    while (isspace(*b)) b++;
+    while (b && isspace(*b)) b++;
 
     // height
     height = strtol(b, &endptr, 0);
     if (endptr == b) return false;
     b = endptr;
-    while (isspace(*b)) b++;
+    while (b && isspace(*b)) b++;
 
     // maxval
     maxval = strtol(b, &endptr, 0);
     if (endptr == b) return false;
     b = endptr;
-    while (isspace(*b)) b++;
+    while (b && isspace(*b)) b++;
     assert(maxval == 255);
 
     image->width = width;
@@ -309,7 +333,7 @@ struct vertex_array {
     int capacity;
 };
 
-bool jc_load_obj_from_memory(JC_Model *model, char *data)
+bool jc_model_load_from_memory(JC_Model *model, char *data, long size)
 {
     char *line;
     char *ptr = data;
@@ -323,7 +347,7 @@ bool jc_load_obj_from_memory(JC_Model *model, char *data)
         if (strcmp(type, "#") == 0) continue;
 
         char *s = strstr(line, type);
-        while (!isspace(*s)) s++;
+        while ((s - data < size) && !isspace(*s)) s++;
         if (strcmp(type, "v") == 0) {
             float x, y, z, w;
             int n = sscanf(s, "%f %f %f %f", &x, &y, &z, &w);
@@ -382,6 +406,7 @@ bool jc_load_obj_from_memory(JC_Model *model, char *data)
     free(texcoords.items);
     free(normals.items);
 
+    memset(model, 0, sizeof(*model));
     model->vertex_count = vertices.count;
     model->vertices = realloc(vertices.items, model->vertex_count * sizeof(JC_Vertex));
     model->transform = jc_matrix_identity();
@@ -389,14 +414,21 @@ bool jc_load_obj_from_memory(JC_Model *model, char *data)
     return true;
 }
 
-bool jc_load_obj(JC_Model *model, const char *path)
+bool jc_model_load(JC_Model *model, const char *path)
 {
     long size;
     char *data = _read_entire_file(path, &size);
     if (data == NULL) return false;
-    bool result = jc_load_obj_from_memory(model, data);
+    bool result = jc_model_load_from_memory(model, data, size);
     free(data);
     return result;
+}
+
+void jc_model_destroy(JC_Model *model)
+{
+    free(model->vertices);
+    model->vertices = NULL;
+    jc_destroy(&model->texture);
 }
 
 //===============
@@ -411,7 +443,7 @@ void jc_clamp(JC_Canvas canvas, int *x, int *y)
     *y = _MIN(y_clamped, canvas.height - 1);
 }
 
-// TODO: look into different ways of alpha blending
+// TODO: look into different ways of blending (https://wiki.libsdl.org/SDL3/SDL_BlendMode)
 void jc_blit(JC_Canvas canvas, JC_Image image, int x, int y)
 {
     if (!JC_IN_BOUNDS(canvas, x, y) && !JC_IN_BOUNDS(canvas, x+image.width, y+image.height)) return;
@@ -553,9 +585,38 @@ void jc_model_wires(JC_Canvas canvas, JC_Model model, JC_Color color)
     }
 }
 
-//======================
+//------Color functions------
+// Blend b onto a
+JC_Color jc_color_blend_alpha(JC_Color ca, JC_Color cb)
+{
+    uint32_t alpha = cb.a;
+    uint32_t r = (ca.r*(255 - alpha) + cb.r*alpha)/255;
+    uint32_t g = (ca.g*(255 - alpha) + cb.g*alpha)/255;
+    uint32_t b = (ca.b*(255 - alpha) + cb.b*alpha)/255;
+    if (r > 255) r = 255;
+    if (g > 255) g = 255;
+    if (b > 255) b = 255;
+    JC_Color c = { r, g, b, ca.a };
+    return c;
+}
+
+JC_Color jc_color_from_int(uint32_t color)
+{
+    JC_Color c = {
+        .r = (color >> 24) & 0xff,
+        .g = (color >> 16) & 0xff,
+        .b = (color >> 8)  & 0xff,
+        .a = (color >> 0)  & 0xff,
+    };
+    return c;
+}
+
+//===========================
 // Linear Algebra stuff
-//=====================
+//==========================
+// NOTE: I think this should be minimal and only provide the most important functions
+// MATRIX: add, sub, mul, projection, translation, rotation, scale
+// VECTOR: add, sub, transform, dot, cross, length, normalize
 
 // Perspective projection of point p which should be the point after any model and view
 // transformations
@@ -574,6 +635,19 @@ JC_Vec2 jc_canvas_coord(JC_Canvas canvas, JC_Vec3 point)
     return p;
 }
 
+// Vector functions
+JC_Vec3 jc_vec3_add(JC_Vec3 a, JC_Vec3 b)
+{
+    JC_Vec3 v = { a.x + b.x, a.y + b.y, a.z + b.z };
+    return v;
+}
+
+JC_Vec3 jc_vec3_sub(JC_Vec3 a, JC_Vec3 b)
+{
+    JC_Vec3 v = { a.x - b.x, a.y - b.y, a.z - b.z };
+    return v;
+}
+
 JC_Vec3 jc_vec3_transform(JC_Matrix a, JC_Vec3 v)
 {
     JC_Vec3 u;
@@ -587,6 +661,37 @@ JC_Vec3 jc_vec3_transform(JC_Matrix a, JC_Vec3 v)
     return u;
 }
 
+float jc_vec3_length(JC_Vec3 v)
+{
+    return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z);
+}
+
+JC_Vec3 jc_vec3_normalize(JC_Vec3 v)
+{
+    float length = sqrtf(v.x*v.x + v.y*v.y + v.z*v.z);
+    if (length == 0.0f) return v;
+    v.x /= length;
+    v.y /= length;
+    v.z /= length;
+    return v;
+}
+
+float jc_vec3_dot(JC_Vec3 a, JC_Vec3 b)
+{
+    return a.x*b.x + a.y*b.y + a.z*b.z;
+}
+
+JC_Vec3 jc_vec3_cross(JC_Vec3 a, JC_Vec3 b)
+{
+    JC_Vec3 v = {
+        a.y*b.z - a.z*b.y,
+        a.z*b.x - a.x*b.z,
+        a.x*b.y - a.y*b.x 
+    };
+    return v;
+}
+
+// Matrix functions
 JC_Matrix jc_matrix_identity(void)
 {
     JC_Matrix m = {
@@ -609,8 +714,19 @@ JC_Matrix jc_matrix_translate(float x, float y, float z)
     return m;
 }
 
+JC_Matrix jc_matrix_scale(float s)
+{
+    JC_Matrix m = {
+        s, 0.0f, 0.0f, 0.0f,
+        0.0f, s, 0.0f, 0.0f,
+        0.0f, 0.0f, s, 0.0f,
+        0.0f, 0.0f, 0.0f, s,
+    };
+    return m;
+}
+
 // TODO: rotate around any axis
-JC_Matrix jc_matrix_rotatex(float angle)
+JC_Matrix jc_matrix_rotate_x(float angle)
 {
     JC_Matrix m = jc_matrix_identity();
     float c = cosf(angle);
@@ -624,7 +740,7 @@ JC_Matrix jc_matrix_rotatex(float angle)
     return m;
 }
 
-JC_Matrix jc_matrix_rotatey(float angle)
+JC_Matrix jc_matrix_rotate_y(float angle)
 {
     JC_Matrix m = jc_matrix_identity();
     float c = cosf(angle);
@@ -638,7 +754,7 @@ JC_Matrix jc_matrix_rotatey(float angle)
     return m;
 }
 
-JC_Matrix jc_matrix_rotatez(float angle)
+JC_Matrix jc_matrix_rotate_z(float angle)
 {
     JC_Matrix m = jc_matrix_identity();
     float c = cosf(angle);
@@ -652,6 +768,25 @@ JC_Matrix jc_matrix_rotatez(float angle)
     return m;
 }
 
+JC_Matrix jc_matrix_add(JC_Matrix a, JC_Matrix b)
+{
+    JC_Matrix m;
+    m.m11 = a.m11+b.m11; m.m12 = a.m12+b.m12; m.m13 = a.m13+b.m13; m.m14 = a.m14+b.m14;
+    m.m21 = a.m21+b.m21; m.m22 = a.m22+b.m22; m.m23 = a.m23+b.m23; m.m24 = a.m24+b.m24;
+    m.m31 = a.m31+b.m31; m.m32 = a.m32+b.m32; m.m33 = a.m33+b.m33; m.m34 = a.m34+b.m34;
+    m.m41 = a.m41+b.m41; m.m42 = a.m42+b.m42; m.m43 = a.m43+b.m43; m.m44 = a.m44+b.m44;
+    return m;
+}
+
+JC_Matrix jc_matrix_sub(JC_Matrix a, JC_Matrix b)
+{
+    JC_Matrix m;
+    m.m11 = a.m11-b.m11; m.m12 = a.m12-b.m12; m.m13 = a.m13-b.m13; m.m14 = a.m14-b.m14;
+    m.m21 = a.m21-b.m21; m.m22 = a.m22-b.m22; m.m23 = a.m23-b.m23; m.m24 = a.m24-b.m24;
+    m.m31 = a.m31-b.m31; m.m32 = a.m32-b.m32; m.m33 = a.m33-b.m33; m.m34 = a.m34-b.m34;
+    m.m41 = a.m41-b.m41; m.m42 = a.m42-b.m42; m.m43 = a.m43-b.m43; m.m44 = a.m44-b.m44;
+    return m;
+}
 
 JC_Matrix jc_matrix_mul(JC_Matrix a, JC_Matrix b)
 {
@@ -678,39 +813,8 @@ JC_Matrix jc_matrix_mul(JC_Matrix a, JC_Matrix b)
     return m;
 }
 
-
-//------Color functions------
-
-// Blend b onto a
-JC_Color jc_color_blend_alpha(JC_Color ca, JC_Color cb)
-{
-    uint32_t alpha = cb.a;
-    uint32_t r = (ca.r*(255 - alpha) + cb.r*alpha)/255;
-    uint32_t g = (ca.g*(255 - alpha) + cb.g*alpha)/255;
-    uint32_t b = (ca.b*(255 - alpha) + cb.b*alpha)/255;
-    if (r > 255) r = 255;
-    if (g > 255) g = 255;
-    if (b > 255) b = 255;
-    JC_Color c = { r, g, b, ca.a };
-    return c;
-}
-
-JC_Color jc_color_from_int(uint32_t color)
-{
-    JC_Color c = {
-        .r = (color >> 24) & 0xff,
-        .g = (color >> 16) & 0xff,
-        .b = (color >> 8)  & 0xff,
-        .a = (color >> 0)  & 0xff,
-    };
-    return c;
-}
-
 #endif // JCANVAS_IMPLEMENTATION
 //======================================
-// TODO: strip prefixes from types and math/util functions similar to https://github.com/tsoding/nob.h
-// #ifndef JC_PREFIX
-// #define Color JC_Color
 
 #endif // JCANVAS_H
 
