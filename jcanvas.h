@@ -114,8 +114,7 @@ typedef struct {
 // NOTE: Do not try to mutate uniforms in this function since this can be called by seperate threads when OpenMP is used.
 // This is a "shader" that is called for every pixel during rasterization
 // input will hold the interpolated values of the vertices given to the rasterize function
-// If no texture is given to the rasterize function it will be NULL
-typedef JC_Color (*JC_ShaderFunc)(JC_Vertex input, JC_Image *texture, void *uniforms);
+typedef bool (*JC_ShaderFunc)(JC_Vertex input, JC_Color *out, void *uniforms);
 
 #define JC_PIXEL(c, x, y) (c).pixels[(y)*(c).width + (x)]
 #define JC_IN_BOUNDS(c, x, y) ((x) >= 0 && (x) < (c).width && (y) >= 0 && (y) < (c).height)
@@ -416,8 +415,8 @@ bool jc_model_load_from_memory(JC_Model *model, char *data, long size)
             for (int i = 0; i < 3; i++) {
                 char *end;
                 // vertex
-                v = strtol(s, &end, 0) - 1;
-                vertex.position = positions.items[v];
+                v = strtol(s, &end, 0);
+                vertex.position = positions.items[v-1];
                 s = end + 1;
                 if (*end != '/') {
                     da_append(&vertices, vertex);
@@ -425,7 +424,7 @@ bool jc_model_load_from_memory(JC_Model *model, char *data, long size)
                 }
                 // texcoord
                 vt = strtol(s, &end, 0);
-                vertex.texcoord = texcoords.items[vt];
+                vertex.texcoord = texcoords.items[vt-1];
                 s = end + 1;
                 if (*end != '/') {
                     da_append(&vertices, vertex);
@@ -433,7 +432,7 @@ bool jc_model_load_from_memory(JC_Model *model, char *data, long size)
                 }
                 // normal
                 vn = strtol(s, &end, 0);
-                vertex.normal = normals.items[vn];
+                vertex.normal = normals.items[vn-1];
                 s = end + 1;
                 da_append(&vertices, vertex);
             }
@@ -490,11 +489,11 @@ void jc_blit(JC_Canvas canvas, JC_Image image, int x, int y)
     }
 
     int x_max = x + image.width;
-    int y_max = y + image.width;
+    int y_max = y + image.height;
     jc_clamp(canvas, &x, &y);
     jc_clamp(canvas, &x_max, &y_max);
-    for (int i = y; i < y_max; ++y) {
-        for (int j = x; x < x_max; ++x) {
+    for (int i = y; i <= y_max; ++i) {
+        for (int j = x; j <= x_max; ++j) {
             JC_Color image_pixel = JC_PIXEL(image, j - x, i - y);
             JC_Color canvas_pixel = JC_PIXEL(canvas, j, i);
             JC_PIXEL(canvas, j, i) = jc_color_blend_alpha(canvas_pixel, image_pixel);
@@ -515,8 +514,8 @@ void jc_blit_rect(JC_Canvas canvas, JC_Image image, int x, int y, int w, int h)
     int y_max = y + h;
     jc_clamp(canvas, &x, &y);
     jc_clamp(canvas, &x_max, &y_max);
-    for (int i = y; i < y_max; ++i) {
-        for (int j = x; j < x_max; ++j) {
+    for (int i = y; i <= y_max; ++i) {
+        for (int j = x; j <= x_max; ++j) {
             int image_x = (j - x) * image.width / w;
             int image_y = (i - y) * image.height / h;
 
@@ -550,8 +549,8 @@ void jc_draw_rect(JC_Canvas canvas, int x, int y, int w, int h, JC_Color color)
     int y_max = y + h;
     jc_clamp(canvas, &x, &y);
     jc_clamp(canvas, &x_max, &y_max);
-    for (int i = y; i < y_max; ++i) {
-        for (int j = x; j < x_max; ++j) {
+    for (int i = y; i <= y_max; ++i) {
+        for (int j = x; j <= x_max; ++j) {
             JC_PIXEL(canvas, j, i) = color;
         }
     }
@@ -615,7 +614,7 @@ void jc_draw_triangle(JC_Canvas canvas, int ax, int ay, int bx, int by, int cx, 
             // to a vertex the area made with the other vertices will be larger
             double alpha = jc_signed_triangle_area(x, y, bx, by, cx, cy) / total_area;
             double beta  = jc_signed_triangle_area(x, y, cx, cy, ax, ay) / total_area;
-            double gamma = jc_signed_triangle_area(x, y, ax, ay, bx, by) / total_area;
+            double gamma = 1.0 - alpha - beta;
             // A negative coordinate means that the point is not in the triangle
             if (alpha < 0 || beta < 0 || gamma < 0) continue;
             if (!JC_IN_BOUNDS(canvas, x, y)) continue;
@@ -648,19 +647,19 @@ void jc_rasterize_triangle_ex(JC_Canvas canvas, float *zbuffer, JC_Vertex v1, JC
         JC_Color color)
 {
     assert(zbuffer != NULL);
-    int ax = v1.position.x, ay = v1.position.y;
-    int bx = v2.position.x, by = v2.position.y;
-    int cx = v3.position.x, cy = v3.position.y;
+    float ax = v1.position.x, ay = v1.position.y;
+    float bx = v2.position.x, by = v2.position.y;
+    float cx = v3.position.x, cy = v3.position.y;
 
-    int min_axbx = MIN(ax, bx);
-    int bb_minx  = MIN(min_axbx, cx);
-    int min_ayby = MIN(ay, by);
-    int bb_miny  = MIN(min_ayby, cy);
+    float min_axbx = MIN(ax, bx);
+    float bb_minx  = MIN(min_axbx, cx);
+    float min_ayby = MIN(ay, by);
+    float bb_miny  = MIN(min_ayby, cy);
 
-    int max_axbx = MAX(ax, bx);
-    int bb_maxx  = MAX(max_axbx, cx);
-    int max_ayby = MAX(ay, by);
-    int bb_maxy  = MAX(max_ayby, cy);
+    float max_axbx = MAX(ax, bx);
+    float bb_maxx  = MAX(max_axbx, cx);
+    float max_ayby = MAX(ay, by);
+    float bb_maxy  = MAX(max_ayby, cy);
     double total_area = jc_signed_triangle_area(ax, ay, bx, by, cx, cy);
     if (total_area < 1) return;
     bool has_texture = texture.pixels != NULL;
@@ -672,21 +671,30 @@ void jc_rasterize_triangle_ex(JC_Canvas canvas, float *zbuffer, JC_Vertex v1, JC
             // to a vertex the area made with the other vertices will be larger
             double alpha = jc_signed_triangle_area(x, y, bx, by, cx, cy) / total_area;
             double beta  = jc_signed_triangle_area(x, y, cx, cy, ax, ay) / total_area;
-            double gamma = jc_signed_triangle_area(x, y, ax, ay, bx, by) / total_area;
+            double gamma = 1.0 - alpha - beta;
             // A negative coordinate means that the point is not in the triangle
             if (alpha < 0 || beta < 0 || gamma < 0) continue;
             if (!JC_IN_BOUNDS(canvas, x, y)) continue;
 
             JC_Vertex frag = jc_barycentric_interpolate(v1, v2, v3, alpha, beta, gamma);
-            if (frag.position.z <= zbuffer[y*canvas.width + x]) continue;
+            float zbuf = zbuffer[y*canvas.width + x];
+            if (frag.position.z <= zbuf) continue;
             zbuffer[y*canvas.width + x] = frag.position.z;
 
             frag.color = jc_color_mul(frag.color, color);
             JC_Color out = frag.color;
             if (jc_active_shader_func != NULL) {
-                out = jc_active_shader_func(frag, has_texture ? &texture : NULL, jc_active_shader_uniforms);
+                bool discard = jc_active_shader_func(frag, &out, jc_active_shader_uniforms);
+                if (discard) {
+                    zbuffer[y*canvas.width + x] = zbuf;
+                    continue;
+                }
             } else if (has_texture) {
-                // TODO: sample texture
+                // TODO: maybe add the interpolation to the Canvas structure to be used here and in blit
+                int u = frag.texcoord.x * texture.width;
+                int v = (1.0f - frag.texcoord.y) * texture.height;
+                JC_Color tex_color = JC_PIXEL(texture, u, v);
+                out = jc_color_mul(out, tex_color);
             }
 
             // XXX: We flip the y axis here
@@ -738,9 +746,9 @@ void jc_draw_model_wires(JC_Canvas canvas, JC_Model model, JC_Color color)
         v2 = jc_project(canvas, v2);
         v3 = jc_project(canvas, v3);
 
-        jc_draw_line(canvas, v1.x, v1.y, v2.x, v2.y, color);
-        jc_draw_line(canvas, v2.x, v2.y, v3.x, v3.y, color);
-        jc_draw_line(canvas, v3.x, v3.y, v1.x, v1.y, color);
+        jc_draw_line(canvas, v1.x, canvas.height - v1.y, v2.x, canvas.height - v2.y, color);
+        jc_draw_line(canvas, v2.x, canvas.height - v2.y, v3.x, canvas.height - v3.y, color);
+        jc_draw_line(canvas, v3.x, canvas.height - v3.y, v1.x, canvas.height - v1.y, color);
     }
 }
 

@@ -7,7 +7,7 @@
 
 #define FRAME_TIME (1.0 / 60.0)
 
-#define RES 600
+#define RES 800
 
 SDL_Window *window;
 SDL_Surface *window_surface;
@@ -16,20 +16,6 @@ Canvas canvas;
 float *zbuffer;
 SDL_Surface *canvas_surface;
 Model model;
-
-void test_model_lines(void)
-{
-    static float theta = 0;
-    theta += 0.02f;
-    model.transform = jc_matrix_rotate_y(theta);
-
-    draw_model_wires(canvas, model, RED);
-    for (int i = 0; i < model.vertex_count; i++) {
-        Vec3 pos = vec3_transform(model.transform, model.vertices[i].position);
-        pos = project(canvas, pos);
-        draw_pixel(canvas, pos.x, pos.y, WHITE);
-    }
-}
 
 void test_triangle(void)
 {
@@ -45,6 +31,7 @@ void test_model(void)
     model.transform = jc_matrix_rotate_y(theta);
 
     draw_model(canvas, zbuffer, model, WHITE);
+    // draw_model_wires(canvas, model, (JC_Color){ 100, 100, 100, 100 });
 }
 
 SDL_AppResult SDL_AppIterate(void *state)
@@ -55,7 +42,6 @@ SDL_AppResult SDL_AppIterate(void *state)
     fill(canvas, BLACK);
     memset(zbuffer, 0, canvas.width*canvas.height*sizeof(float));
 
-    // test_model_lines();
     // test_triangle();
     test_model();
 
@@ -99,14 +85,7 @@ SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
             canvas.pixels, canvas.width*sizeof(JC_Color));
 
     model_load(&model, "res/diablo3.obj");
-    for (int i = 0; i < model.vertex_count / 3; i++) {
-        Color rcolor = { 55+rand()%200, 50, 50, 255 };
-        model.vertices[3*i].color = rcolor;
-        rcolor = (Color){ 50, 55+rand()%200, 50, 255 };
-        model.vertices[3*i+1].color = rcolor;
-        rcolor = (Color){ 50, 50, 55+rand()%200, 255 };
-        model.vertices[3*i+2].color = rcolor;
-    }
+    load_ppm(&model.texture, "res/diablo3_diffuse.ppm");
     return SDL_APP_CONTINUE;
 }
 
