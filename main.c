@@ -12,10 +12,13 @@
 SDL_Window *window;
 SDL_Surface *window_surface;
 
-Canvas canvas;
-float *zbuffer;
 SDL_Surface *canvas_surface;
+float *zbuffer;
+Canvas canvas;
 Model model;
+JC_Camera camera;
+JC_Image image;
+bool render_depth;
 
 void test_triangle(void)
 {
@@ -24,26 +27,56 @@ void test_triangle(void)
     draw_triangle(canvas, 115, 83, 80,  90, 85, 120, GREEN);
 }
 
-void test_model(void)
-{
-    static float theta = 0;
-    theta += 0.02f;
-    model.transform = jc_matrix_rotate_y(theta);
-
-    draw_model(canvas, zbuffer, model, WHITE);
-    // draw_model_wires(canvas, model, (JC_Color){ 100, 100, 100, 100 });
-}
-
 SDL_AppResult SDL_AppIterate(void *state)
 {
     (void)state;
     double frame_time_start = (double)SDL_GetTicksNS()/SDL_NS_PER_SECOND;
 
-    fill(canvas, BLACK);
-    memset(zbuffer, 0, canvas.width*canvas.height*sizeof(float));
+    Vec3 forward = vec3_normalize(vec3_sub(camera.target, camera.position));
+    Vec3 right = vec3_normalize(vec3_cross(forward, camera.up));
+    forward = vec3_scale(forward, 0.08);
+    right = vec3_scale(right, 0.08);
 
-    // test_triangle();
-    test_model();
+    // Using SDL callbacks the events pumped for us
+    const bool *keys = SDL_GetKeyboardState(NULL);
+    if (keys[SDL_SCANCODE_W]) {
+        camera.position = vec3_add(camera.position, forward);
+    } else if (keys[SDL_SCANCODE_S]) {
+        camera.position = vec3_sub(camera.position, forward);
+    } else if (keys[SDL_SCANCODE_A]) {
+        camera.position = vec3_sub(camera.position, right);
+    } else if (keys[SDL_SCANCODE_D]) {
+        camera.position = vec3_add(camera.position, right);
+    }
+    if (keys[SDL_SCANCODE_SPACE]) {
+        camera.position.y += 0.1;
+        camera.target.y += 0.1;
+    } else if (keys[SDL_SCANCODE_LCTRL]) {
+        camera.position.y -= 0.1;
+        camera.target.y -= 0.1;
+    }
+
+    float dx, dy;
+    SDL_GetRelativeMouseState(&dx,&dy);
+    float yaw = -DEG2RAD(dx) * 0.1;
+    float pitch = DEG2RAD(dy) * 0.1;
+
+    forward = vec3_transform(matrix_rotate_y(yaw), forward);
+    forward = vec3_transform(matrix_rotate(right, pitch), forward);
+    forward = vec3_normalize(forward);
+    float target_dist = vec3_length(vec3_sub(camera.target, camera.position));
+    camera.target = vec3_add(camera.position, vec3_scale(forward, target_dist));
+
+
+    // Rendering
+    fill(canvas, BLACK);
+    // clear zbuffer
+    memset(zbuffer, 0, canvas.width*canvas.height*sizeof(float));
+    draw_model(canvas, camera, model, zbuffer, WHITE);
+
+    JC_Rect src = { 0, 0, image.width, image.height };
+    JC_Rect dst = { canvas.width - 200, canvas.height - 200, 200, 200 };
+    blit_rect(canvas, image, dst, src);
 
     SDL_BlitSurfaceScaled(canvas_surface, NULL, window_surface, NULL, 0);
     SDL_UpdateWindowSurface(window);
@@ -64,9 +97,17 @@ SDL_AppResult SDL_AppIterate(void *state)
 SDL_AppResult SDL_AppEvent(void *state, SDL_Event *e)
 {
     (void)state;
-
     if (e->type == SDL_EVENT_QUIT) return SDL_APP_SUCCESS;
-    if (e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_ESCAPE) return SDL_APP_SUCCESS;
+    if (e->type == SDL_EVENT_KEY_DOWN) {
+        SDL_Keycode k = e->key.key;
+        if (k == SDLK_ESCAPE) return SDL_APP_SUCCESS;
+        if (k == SDLK_TAB) {
+            int w, h;
+            SDL_GetWindowSize(window, &w, &h);
+            SDL_WarpMouseInWindow(window, w/2, h/2);
+            SDL_SetWindowRelativeMouseMode(window, !SDL_GetWindowRelativeMouseMode(window));
+        }
+    }
 
     return SDL_APP_CONTINUE;
 }
@@ -79,19 +120,29 @@ SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
     if (window == NULL) return SDL_APP_FAILURE;
     window_surface = SDL_GetWindowSurface(window);
 
-    jc_create(&canvas, RES, RES);
+    canvas_create(&canvas, RES, RES);
     zbuffer = calloc(canvas.width*canvas.height, sizeof(float));
     canvas_surface = SDL_CreateSurfaceFrom(canvas.width, canvas.height, SDL_PIXELFORMAT_RGBA32,
             canvas.pixels, canvas.width*sizeof(JC_Color));
 
     model_load(&model, "res/diablo3.obj");
     load_ppm(&model.texture, "res/diablo3_diffuse.ppm");
+    load_ppm(&image, "horse.ppm");
+
+    camera = (Camera){
+        .position   = { 1.0f, 1.0f, 1.0f },
+        .target     = { 0.0f, 0.0f, 0.0f },
+        .up         = { 0.0f, 1.0f, 0.0f },
+        .fov        = 60,
+        .projection = JC_PERSPECTIVE,
+    };
+
     return SDL_APP_CONTINUE;
 }
 
 void SDL_AppQuit(void *state, SDL_AppResult result)
 {
     (void)result, (void)state;
-    jc_destroy(&canvas);
+    canvas_destroy(&canvas);
     model_destroy(&model);
 }

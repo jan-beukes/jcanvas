@@ -1,4 +1,3 @@
 main
 *.ppm
-wayland/*.c
-wayland/*.h
+!res/*.ppm

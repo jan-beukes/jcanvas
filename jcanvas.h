@@ -67,13 +67,14 @@ typedef struct {
 #define MAGENTA    CLITERAL(JC_Color){ 255, 0, 255, 255 }
 
 // The main canvas/image structure in RGBA8 format
-// TODO: pitch for subcanvas ?
 typedef struct {
     int width, height;
+    int stride; // number of bytes per row
     JC_Color *pixels;
 } JC_Canvas;
 
 // This typedef is just a way to document usage since these are the exact same structure
+// There are also aliases of all the jc_canvas* functions such as jc_image_create
 typedef JC_Canvas JC_Image;
 
 typedef struct {
@@ -94,9 +95,30 @@ typedef struct {
     JC_Color color;
 } JC_Vertex;
 
-// TODO: make da camera
+typedef struct {
+    float x, y;
+    float w, h;
+} JC_Rect;
+
+// You can change these
+#ifndef JC_NEAR_PLANE
+#define JC_NEAR_PLANE 0.1f
+#endif
+#ifndef JC_FAR_PLANE
+#define JC_FAR_PLANE 1000.0f
+#endif
+
+typedef enum {
+    JC_PERSPECTIVE,
+    JC_ORTHOGRAPHIC,
+} JC_Projection;
+
 typedef struct {
     JC_Vec3 position;
+    JC_Vec3 target;
+    JC_Vec3 up;
+    float fov;
+    JC_Projection projection;
 } JC_Camera;
 
 // The faces are currently only triangles
@@ -104,7 +126,6 @@ typedef struct {
     JC_Vertex *vertices;
     int vertex_count;
     JC_Matrix transform;
-
     // This is what will be applied when no shader func is set
     // If you want to do something more advanced set the shader func
     // and pass uniforms to sample textures
@@ -116,7 +137,7 @@ typedef struct {
 // input will hold the interpolated values of the vertices given to the rasterize function
 typedef bool (*JC_ShaderFunc)(JC_Vertex input, JC_Color *out, void *uniforms);
 
-#define JC_PIXEL(c, x, y) (c).pixels[(y)*(c).width + (x)]
+#define JC_PIXEL(c, x, y) (c).pixels[(y)*(c).stride + (x)]
 #define JC_IN_BOUNDS(c, x, y) ((x) >= 0 && (x) < (c).width && (y) >= 0 && (y) < (c).height)
 
 // Mr C++ don't mangle my function names
@@ -124,9 +145,10 @@ typedef bool (*JC_ShaderFunc)(JC_Vertex input, JC_Color *out, void *uniforms);
 extern "C" {
 #endif
 
-bool jc_create(JC_Canvas *canvas, int width, int height);
-void jc_destroy(JC_Canvas *canvas);
-void jc_resize(JC_Canvas *canvas, int w, int h);
+bool jc_canvas_create(JC_Canvas *canvas, int width, int height);
+JC_Canvas jc_subcanvas(JC_Canvas canvas, int x, int y, int w, int h);
+void jc_canvas_destroy(JC_Canvas *canvas);
+void jc_canvas_resize(JC_Canvas *canvas, int w, int h);
 
 // These are currently the only image loading functions provided
 // If you want to load an image then you can simply load the data using something like stb_image
@@ -150,7 +172,7 @@ void jc_clamp(JC_Canvas canvas, int *x, int *y);
 // These functions are used to draw another canvas/image to a canvas
 void jc_blit(JC_Canvas canvas, JC_Image image, int x, int y);
 // Like cv_blit but it scales the image so that it occupies the rectangle (x, y, w, h)
-void jc_blit_rect(JC_Canvas canvas, JC_Image image, int x, int y, int w, int h);
+void jc_blit_rect(JC_Canvas canvas, JC_Image image, JC_Rect dst, JC_Rect src);
 
 // TODO: vector argument functions?
 void jc_fill(JC_Canvas canvas, JC_Color color);
@@ -163,15 +185,16 @@ void jc_draw_triangle(JC_Canvas canvas, int ax, int ay, int bx, int by, int cx, 
 void jc_set_shader_func(JC_ShaderFunc func, void *uniforms);
 void jc_unset_shader_func(void);
 
-// NOTE: Vertices have y starting at the bottom unlike all the other function!!
+// These functions expect v1, v2, v3 to be in canvas space with z in [0, 1].
+// NOTE: Y is up for vertices!
 void jc_rasterize_triangle(JC_Canvas canvas, float *zbuffer, JC_Vertex v1, JC_Vertex v2, JC_Vertex v3);
 void jc_rasterize_triangle_ex(JC_Canvas canvas, float *zbuffer, JC_Vertex v1, JC_Vertex v2, JC_Vertex v3,
         JC_Image texture, JC_Color color);
 
 // The zbuffer is what is used for depth testing so make sure to use the same one for the entire scene
 // It should be of size width*height and initialized and cleared to zero. After projection z is in [0, 255]
-void jc_draw_model(JC_Canvas canvas, float *zbuffer, JC_Model model, JC_Color color);
-void jc_draw_model_wires(JC_Canvas canvas, JC_Model model, JC_Color color);
+void jc_draw_model(JC_Canvas canvas, JC_Camera camera, JC_Model model, float *zbuffer, JC_Color color);
+void jc_draw_model_wires(JC_Canvas canvas, JC_Camera camera, JC_Model model, JC_Color color);
 
 JC_Vertex jc_barycentric_interpolate(JC_Vertex v1, JC_Vertex v2, JC_Vertex v3, float alpha, float beta, float gamma);
 
@@ -183,7 +206,10 @@ JC_Color jc_color_mul(JC_Color a, JC_Color b);
 JC_Color jc_color_lerp(JC_Color a, JC_Color b, float t);
 
 //---Linear algebra functions---
-JC_Vec3 jc_project(JC_Canvas, JC_Vec3 point);
+#define JC_DEG2RAD(x) (M_PI * x / 180)
+#define JC_RAD2DEG(x) (180 * x / M_PI)
+JC_Vec3 jc_orthographic(JC_Canvas canvas, JC_Vec3 point);
+JC_Vec3 jc_perspective(JC_Canvas canvas, JC_Vec3 point, float f);
 
 JC_Vec3 jc_vec3_add(JC_Vec3 a, JC_Vec3 b);
 JC_Vec3 jc_vec3_sub(JC_Vec3 a, JC_Vec3 b);
@@ -195,9 +221,11 @@ float jc_vec3_dot(JC_Vec3 a, JC_Vec3 b);
 float jc_vec3_length(JC_Vec3 v);
 
 JC_Matrix jc_matrix_identity(void);
+JC_Matrix jc_matrix_view(JC_Camera camera);
 
 JC_Matrix jc_matrix_translate(float x, float y, float z);
 JC_Matrix jc_matrix_scale(float s);
+JC_Matrix jc_matrix_rotate(JC_Vec3 axis, float angle);
 JC_Matrix jc_matrix_rotate_x(float angle);
 JC_Matrix jc_matrix_rotate_y(float angle);
 JC_Matrix jc_matrix_rotate_z(float angle);
@@ -242,10 +270,11 @@ do { \
     (da)->items[(da)->count++] = item; \
 } while (0)
 
-bool jc_create(JC_Canvas *canvas, int width, int height)
+bool jc_canvas_create(JC_Canvas *canvas, int width, int height)
 {
     canvas->width = width;
     canvas->height = height;
+    canvas->stride = width;
     size_t size = width * height * sizeof(JC_Color);
     canvas->pixels = malloc(size);
     if (canvas->pixels == NULL) return false;
@@ -256,16 +285,33 @@ bool jc_create(JC_Canvas *canvas, int width, int height)
     return true;
 }
 
-void jc_destroy(JC_Canvas *canvas)
+JC_Canvas jc_subcanvas(JC_Canvas canvas, int x, int y, int w, int h)
 {
+    int x_max = x + w;
+    int y_max = y + h;
+    jc_clamp(canvas, &x, &y);
+    jc_clamp(canvas, &x_max, &y_max);
+
+    JC_Canvas c = canvas;
+    c.pixels = &JC_PIXEL(canvas, x, y);
+    c.width = x_max - x;
+    c.height = y_max - y;
+    return c;
+}
+
+void jc_canvas_destroy(JC_Canvas *canvas)
+{
+    // This is a subcanvas and we cannot be certain that the pointer is a valid free
+    if (canvas->width != canvas->stride) return;
     free(canvas->pixels);
     canvas->pixels = NULL;
 }
 
-void jc_resize(JC_Canvas *canvas, int w, int h)
+void jc_canvas_resize(JC_Canvas *canvas, int w, int h)
 {
     canvas->pixels = realloc(canvas->pixels, w*h*sizeof(JC_Color));
     canvas->width = w;
+    canvas->stride = w;
     canvas->height = h;
 }
 
@@ -325,6 +371,7 @@ bool jc_load_ppm(JC_Canvas *image, const char *path)
 
     image->width = width;
     image->height = height;
+    image->stride = width;
     image->pixels = malloc(width*height*sizeof(JC_Color));
 
     // parse pixels
@@ -465,7 +512,7 @@ void jc_model_destroy(JC_Model *model)
 {
     free(model->vertices);
     model->vertices = NULL;
-    jc_destroy(&model->texture);
+    jc_canvas_destroy(&model->texture);
 }
 
 //=================
@@ -482,18 +529,17 @@ void jc_clamp(JC_Canvas canvas, int *x, int *y)
 // TODO: look into different ways of blending (https://wiki.libsdl.org/SDL3/SDL_BlendMode)
 void jc_blit(JC_Canvas canvas, JC_Image image, int x, int y)
 {
-    if (!JC_IN_BOUNDS(canvas, x, y) && !JC_IN_BOUNDS(canvas, x+image.width, y+image.height)) return;
-    if (x == 0 && y == 0 && canvas.width == image.width && canvas.height == image.height) {
-        memcpy(canvas.pixels, image.pixels, canvas.width*canvas.height*sizeof(JC_Color));
-        return;
-    }
+    if ((x < 0 && x+image.width < 0) || (x >= canvas.width && x+image.width >= canvas.width)) return;
+    if ((y < 0 && y+image.height < 0) || (x >= canvas.height && y+image.height >= canvas.height)) return;
 
-    int x_max = x + image.width;
-    int y_max = y + image.height;
-    jc_clamp(canvas, &x, &y);
+    int x_min = x, y_min = y;
+    int x_max = x + image.width, y_max = y + image.height;
+    jc_clamp(canvas, &x_min, &y_min);
     jc_clamp(canvas, &x_max, &y_max);
-    for (int i = y; i <= y_max; ++i) {
-        for (int j = x; j <= x_max; ++j) {
+    for (int i = y_min; i <= y_max; ++i) {
+        for (int j = x_min; j <= x_max; ++j) {
+            if (!JC_IN_BOUNDS(image, j-x, i-y)) continue;
+
             JC_Color image_pixel = JC_PIXEL(image, j - x, i - y);
             JC_Color canvas_pixel = JC_PIXEL(canvas, j, i);
             JC_PIXEL(canvas, j, i) = jc_color_blend_alpha(canvas_pixel, image_pixel);
@@ -502,22 +548,22 @@ void jc_blit(JC_Canvas canvas, JC_Image image, int x, int y)
 }
 
 // TODO: Add interpolation option
-void jc_blit_rect(JC_Canvas canvas, JC_Image image, int x, int y, int w, int h)
+void jc_blit_rect(JC_Canvas canvas, JC_Image image, JC_Rect dst, JC_Rect src)
 {
-    if (!JC_IN_BOUNDS(canvas, x, y) && !JC_IN_BOUNDS(canvas, x+w, y+h)) return;
-    if (w == (int)image.width && h == (int)image.height) {
-        jc_blit(canvas, image, x, y);
-        return;
-    }
+    if ((dst.x < 0 && dst.x+dst.w < 0) || (dst.x >= canvas.width && dst.x+dst.w >= canvas.width)) return;
+    if ((dst.x < 0 && dst.y+dst.h < 0) || (dst.y >= canvas.height && dst.y+dst.h >= canvas.height)) return;
+    if ((src.x < 0 && src.x+src.w < 0) || (src.x >= image.width && src.x+src.w >= image.width)) return;
+    if ((src.x < 0 && src.y+src.h < 0) || (src.y >= image.height && src.y+src.h >= image.height)) return;
 
-    int x_max = x + w;
-    int y_max = y + h;
-    jc_clamp(canvas, &x, &y);
+    int x_min = dst.x, y_min = dst.y;
+    int x_max = dst.x + dst.w, y_max = dst.y + dst.h;
+    jc_clamp(canvas, &x_min, &y_min);
     jc_clamp(canvas, &x_max, &y_max);
-    for (int i = y; i <= y_max; ++i) {
-        for (int j = x; j <= x_max; ++j) {
-            int image_x = (j - x) * image.width / w;
-            int image_y = (i - y) * image.height / h;
+    for (int i = y_min; i <= y_max; ++i) {
+        for (int j = x_min; j <= x_max; ++j) {
+            int image_x = src.x + (j - dst.x) * src.w / dst.w;
+            int image_y = src.y + (i - dst.y) * src.h / dst.h;
+            if (!JC_IN_BOUNDS(image, image_x, image_y)) continue;
 
             JC_Color image_pixel = JC_PIXEL(image, image_x, image_y);
             JC_Color canvas_pixel = JC_PIXEL(canvas, j, i);
@@ -543,10 +589,10 @@ void jc_draw_pixel(JC_Canvas canvas, int x, int y, JC_Color color)
 
 void jc_draw_rect(JC_Canvas canvas, int x, int y, int w, int h, JC_Color color)
 {
-    if (!JC_IN_BOUNDS(canvas, x, y) && !JC_IN_BOUNDS(canvas, x+w, y+h)) return;
+    if ((x < 0 && x+w < 0) || (x >= canvas.width && x+w >= canvas.width)) return;
+    if ((y < 0 && y+h < 0) || (x >= canvas.height && y+h >= canvas.height)) return;
 
-    int x_max = x + w;
-    int y_max = y + h;
+    int x_max = x + w, y_max = y + h;
     jc_clamp(canvas, &x, &y);
     jc_clamp(canvas, &x_max, &y_max);
     for (int i = y; i <= y_max; ++i) {
@@ -643,23 +689,23 @@ void jc_rasterize_triangle(JC_Canvas canvas, float *zbuffer, JC_Vertex v1, JC_Ve
     jc_rasterize_triangle_ex(canvas, zbuffer, v1, v2, v3, texture, color);
 }
 
-void jc_rasterize_triangle_ex(JC_Canvas canvas, float *zbuffer, JC_Vertex v1, JC_Vertex v2, JC_Vertex v3, JC_Image texture,
-        JC_Color color)
+void jc_rasterize_triangle_ex(JC_Canvas canvas, float *zbuffer, JC_Vertex v1, JC_Vertex v2, JC_Vertex v3,
+        JC_Image texture, JC_Color color)
 {
     assert(zbuffer != NULL);
-    float ax = v1.position.x, ay = v1.position.y;
-    float bx = v2.position.x, by = v2.position.y;
-    float cx = v3.position.x, cy = v3.position.y;
+    int ax = v1.position.x, ay = v1.position.y;
+    int bx = v2.position.x, by = v2.position.y;
+    int cx = v3.position.x, cy = v3.position.y;
 
-    float min_axbx = MIN(ax, bx);
-    float bb_minx  = MIN(min_axbx, cx);
-    float min_ayby = MIN(ay, by);
-    float bb_miny  = MIN(min_ayby, cy);
+    int min_axbx = MIN(ax, bx);
+    int bb_minx  = MIN(min_axbx, cx);
+    int min_ayby = MIN(ay, by);
+    int bb_miny  = MIN(min_ayby, cy);
 
-    float max_axbx = MAX(ax, bx);
-    float bb_maxx  = MAX(max_axbx, cx);
-    float max_ayby = MAX(ay, by);
-    float bb_maxy  = MAX(max_ayby, cy);
+    int max_axbx = MAX(ax, bx);
+    int bb_maxx  = MAX(max_axbx, cx);
+    int max_ayby = MAX(ay, by);
+    int bb_maxy  = MAX(max_ayby, cy);
     double total_area = jc_signed_triangle_area(ax, ay, bx, by, cx, cy);
     if (total_area < 1) return;
     bool has_texture = texture.pixels != NULL;
@@ -678,7 +724,10 @@ void jc_rasterize_triangle_ex(JC_Canvas canvas, float *zbuffer, JC_Vertex v1, JC
 
             JC_Vertex frag = jc_barycentric_interpolate(v1, v2, v3, alpha, beta, gamma);
             float zbuf = zbuffer[y*canvas.width + x];
+
+            if (frag.position.z > 1.0f) continue;
             if (frag.position.z <= zbuf) continue;
+
             zbuffer[y*canvas.width + x] = frag.position.z;
 
             frag.color = jc_color_mul(frag.color, color);
@@ -691,60 +740,88 @@ void jc_rasterize_triangle_ex(JC_Canvas canvas, float *zbuffer, JC_Vertex v1, JC
                 }
             } else if (has_texture) {
                 // TODO: maybe add the interpolation to the Canvas structure to be used here and in blit
-                int u = frag.texcoord.x * texture.width;
-                int v = (1.0f - frag.texcoord.y) * texture.height;
+                int u = frag.texcoord.x * (texture.width - 1);
+                int v = (1.0f - frag.texcoord.y) * (texture.height - 1);
                 JC_Color tex_color = JC_PIXEL(texture, u, v);
                 out = jc_color_mul(out, tex_color);
             }
 
             // XXX: We flip the y axis here
-            JC_PIXEL(canvas, x, canvas.height - y) = out;
+            JC_PIXEL(canvas, x, (canvas.width-1 - y)) = out;
         }
     }
 }
 
-void jc_draw_model(JC_Canvas canvas, float *zbuffer, JC_Model model, JC_Color color)
+void jc_draw_model(JC_Canvas canvas, JC_Camera camera, JC_Model model, float *zbuffer, JC_Color color)
 {
     assert(zbuffer != NULL);
+
     int triangle_count = model.vertex_count / 3;
+    JC_Matrix model_view = jc_matrix_mul(jc_matrix_view(camera), model.transform);
 #pragma omp parallel for
     for (int i = 0; i < triangle_count; i++) {
         JC_Vertex v1 = model.vertices[3*i];
         JC_Vertex v2 = model.vertices[3*i + 1];
         JC_Vertex v3 = model.vertices[3*i + 2];
 
-        // model transform
-        v1.position = jc_vec3_transform(model.transform, v1.position);
-        v2.position = jc_vec3_transform(model.transform, v2.position);
-        v3.position = jc_vec3_transform(model.transform, v3.position);
+        // model view transform
+        v1.position = jc_vec3_transform(model_view, v1.position);
+        v2.position = jc_vec3_transform(model_view, v2.position);
+        v3.position = jc_vec3_transform(model_view, v3.position);
 
-        // project to canvas
-        v1.position = jc_project(canvas, v1.position);
-        v2.position = jc_project(canvas, v2.position);
-        v3.position = jc_project(canvas, v3.position);
+        if (camera.projection == JC_PERSPECTIVE) {
+            float fov = camera.fov == 0.0f ? 60.0f : camera.fov;
+            float f = 1.0f / tanf(JC_DEG2RAD(fov) / 2);
+            v1.position = jc_perspective(canvas, v1.position, f);
+            v2.position = jc_perspective(canvas, v2.position, f);
+            v3.position = jc_perspective(canvas, v3.position, f);
+        } else {
+            v1.position = jc_orthographic(canvas, v1.position);
+            v2.position = jc_orthographic(canvas, v2.position);
+            v3.position = jc_orthographic(canvas, v3.position);
+        }
+
+        // The entire triangle is off screen
+        if (!JC_IN_BOUNDS(canvas, v1.position.x, v1.position.y) &&
+            !JC_IN_BOUNDS(canvas, v2.position.x, v2.position.y) &&
+            !JC_IN_BOUNDS(canvas, v3.position.x, v3.position.y))
+            continue;
 
         jc_rasterize_triangle_ex(canvas, zbuffer, v1, v2, v3, model.texture, color);
     }
 }
 
 // NOTE: This does not use any of the vertex colors or the model texture
-void jc_draw_model_wires(JC_Canvas canvas, JC_Model model, JC_Color color)
+void jc_draw_model_wires(JC_Canvas canvas, JC_Camera camera, JC_Model model, JC_Color color)
 {
     int triangle_count = model.vertex_count / 3;
+    JC_Matrix model_view = jc_matrix_mul(jc_matrix_view(camera), model.transform);
     for (int i = 0; i < triangle_count; i++) {
         JC_Vec3 v1 = model.vertices[3*i].position;
         JC_Vec3 v2 = model.vertices[3*i + 1].position;
         JC_Vec3 v3 = model.vertices[3*i + 2].position;
 
-        // model transform
-        v1 = jc_vec3_transform(model.transform, v1);
-        v2 = jc_vec3_transform(model.transform, v2);
-        v3 = jc_vec3_transform(model.transform, v3);
+        // model view transform
+        v1 = jc_vec3_transform(model_view, v1);
+        v2 = jc_vec3_transform(model_view, v2);
+        v3 = jc_vec3_transform(model_view, v3);
 
-        // project to canvas
-        v1 = jc_project(canvas, v1);
-        v2 = jc_project(canvas, v2);
-        v3 = jc_project(canvas, v3);
+        if (camera.projection == JC_PERSPECTIVE) {
+            float fov = camera.fov == 0.0f ? 60.0f : camera.fov;
+            float f = 1.0f / tanf(JC_DEG2RAD(fov) / 2);
+            v1 = jc_perspective(canvas, v1, f);
+            v2 = jc_perspective(canvas, v2, f);
+            v3 = jc_perspective(canvas, v3, f);
+        } else {
+            v1 = jc_orthographic(canvas, v1);
+            v2 = jc_orthographic(canvas, v2);
+            v3 = jc_orthographic(canvas, v3);
+        }
+
+        if (!JC_IN_BOUNDS(canvas, v1.x, v1.y) &&
+            !JC_IN_BOUNDS(canvas, v2.x, v2.y) &&
+            !JC_IN_BOUNDS(canvas, v3.x, v3.y))
+            continue;
 
         jc_draw_line(canvas, v1.x, canvas.height - v1.y, v2.x, canvas.height - v2.y, color);
         jc_draw_line(canvas, v2.x, canvas.height - v2.y, v3.x, canvas.height - v3.y, color);
@@ -832,15 +909,33 @@ JC_Color jc_color_from_int(uint32_t color)
 // Linear Algebra stuff
 //==========================
 
-// Transform point from x: [-1, 1] to [0, width] and y: [-1, 1] to [0, height], z:[-1, 1] to [0, 255]
-JC_Vec3 jc_project(JC_Canvas canvas, JC_Vec3 point)
+JC_Vec3 jc_orthographic(JC_Canvas canvas, JC_Vec3 point)
 {
     JC_Vec3 p = {
-        (point.x + 1.0f)/2.0f * canvas.width,
-        (point.y + 1.0f)/2.0f * canvas.height,
-        (point.z + 1.0f)/2.0f * 255.0f,
+        (point.x + 1.0f)*0.5f * canvas.width,
+        (point.y + 1.0f)*0.5f * canvas.height,
+        // linear z
+        1.0f - (-point.z - JC_NEAR_PLANE)/(JC_FAR_PLANE - JC_NEAR_PLANE),
     };
     return p;
+}
+
+JC_Vec3 jc_perspective(JC_Canvas canvas, JC_Vec3 v, float f)
+{
+    float aspect = (float)canvas.width / canvas.height;
+    float w = -v.z;
+    if (w < JC_NEAR_PLANE) w = JC_NEAR_PLANE;
+    float xp = (v.x * f) / (aspect * w); // we need to also handle aspect ration
+    float yp = (v.y * f) / w;
+    float near = JC_NEAR_PLANE, far = JC_FAR_PLANE;
+    float z_inverse = (near * far) / (w * (far - near)) - (near / (far - near));
+    JC_Vec3 result = {
+        (xp + 1.0f)*0.5f * canvas.width,
+        (yp + 1.0f)*0.5f * canvas.height,
+        z_inverse,
+    };
+
+    return result;
 }
 
 // Vector functions
@@ -927,6 +1022,23 @@ JC_Matrix jc_matrix_identity(void)
     return m;
 }
 
+JC_Matrix jc_matrix_view(JC_Camera camera)
+{
+    JC_Vec3 n = jc_vec3_normalize(jc_vec3_sub(camera.position, camera.target));
+    JC_Vec3 l = jc_vec3_normalize(jc_vec3_cross(camera.up, n));
+    JC_Vec3 m = jc_vec3_normalize(jc_vec3_cross(n, l));
+    JC_Vec3 c = camera.position;
+
+    JC_Matrix result = {
+        l.x, l.y, l.z, 0,
+        m.x, m.y, m.z, 0,
+        n.x, n.y, n.z, 0,
+        0,     0,   0, 1,
+    };
+    result = jc_matrix_mul(result, jc_matrix_translate(-c.x, -c.y, -c.z));
+    return result;
+}
+
 JC_Matrix jc_matrix_translate(float x, float y, float z)
 {
     JC_Matrix m = {
@@ -947,6 +1059,46 @@ JC_Matrix jc_matrix_scale(float s)
         0.0f, 0.0f, 0.0f, s,
     };
     return m;
+}
+
+JC_Matrix jc_matrix_rotate(JC_Vec3 axis, float angle)
+{
+    JC_Matrix result = {0};
+    float x = axis.x, y = axis.y, z = axis.z;
+
+    float length_sqr = x*x + y*y + z*z;
+    if (length_sqr != 1.0f && length_sqr != 0.0f) {
+        float inv_length = 1.0f/sqrtf(length_sqr);
+        x *= inv_length;
+        y *= inv_length;
+        z *= inv_length;
+    }
+
+    float s = sinf(angle);
+    float c = cosf(angle);
+    float t = 1.0f - c;
+
+    result.m11 = x*x*t + c;
+    result.m12 = y*x*t + z*s;
+    result.m13 = z*x*t - y*s;
+    result.m14 = 0.0f;
+
+    result.m21 = x*y*t - z*s;
+    result.m22 = y*y*t + c;
+    result.m23 = z*y*t + x*s;
+    result.m24 = 0.0f;
+
+    result.m31 = x*z*t + y*s;
+    result.m32 = y*z*t - x*s;
+    result.m33 = z*z*t + c;
+    result.m34 = 0.0f;
+
+    result.m41 = 0.0f;
+    result.m42 = 0.0f;
+    result.m43 = 0.0f;
+    result.m44 = 1.0f;
+
+    return result;
 }
 
 // TODO: rotate around any axis
@@ -1045,7 +1197,6 @@ JC_Matrix jc_matrix_mul(JC_Matrix a, JC_Matrix b)
 #endif // JCANVAS_IMPLEMENTATION
 //======================================
 // Strip prefixes from types and functions. This idea is taken from https://github.com/tsoding/nob.h
-// NOTE: the exception is canvas related functions such as jc_create, jc_destroy, jc_resize
 #ifndef JC_PREFIX
 #define Canvas JC_Canvas
 #define Color JC_Color
@@ -1055,11 +1206,21 @@ JC_Matrix jc_matrix_mul(JC_Matrix a, JC_Matrix b)
 #define Matrix JC_Matrix
 #define Vec3 JC_Vec3
 
+#define canvas_create jc_canvas_create
+#define image_create jc_canvas_create
+#define canvas_destroy jc_canvas_destroy
+#define image_destroy jc_canvas_destroy
+#define subcanvas jc_subcanvas
+#define subimage jc_subcanvas
+#define canvas_resize jc_canvas_resize
+#define image_resize jc_canvas_resize
+
 #define load_ppm jc_load_ppm
 #define save_ppm jc_save_ppm
 #define model_load jc_model_load
 #define model_load_from_memory jc_model_load_from_memory
 #define model_destroy jc_model_destroy
+
 #define blit jc_blit
 #define blit_rect jc_blit_rect
 #define fill jc_fill
@@ -1071,10 +1232,14 @@ JC_Matrix jc_matrix_mul(JC_Matrix a, JC_Matrix b)
 #define draw_model_wires jc_draw_model_wires
 #define color_from_int jc_color_from_int
 #define color_blend_alpha jc_color_blend_alpha
+
+#define DEG2RAD JC_DEG2RAD
+#define RAD2DEG JC_RAD2DEG
 #define clamp jc_clamp
-#define project jc_project
+#define orthographic jc_orthographic
 #define vec3_add jc_vec3_add
 #define vec3_sub jc_vec3_sub
+#define vec3_scale jc_vec3_scale
 #define vec3_transform jc_vec3_transform
 #define vec3_normalize jc_vec3_normalize
 #define vec3_cross jc_vec3_cross
@@ -1083,6 +1248,7 @@ JC_Matrix jc_matrix_mul(JC_Matrix a, JC_Matrix b)
 #define matrix_identity jc_matrix_identity
 #define matrix_translate jc_matrix_translate
 #define matrix_scale jc_matrix_scale
+#define matrix_rotate jc_matrix_rotate
 #define matrix_rotate_x jc_matrix_rotate_x
 #define matrix_rotate_y jc_matrix_rotate_y
 #define matrix_rotate_z jc_matrix_rotate_z
