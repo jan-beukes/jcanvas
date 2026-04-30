@@ -12,13 +12,10 @@
 #define WINX 1280
 #define WINY 720
 
-#ifdef HIGH
-#define RESX WINX
-#define RESY WINY
-#else
-#define RESX 448
-#define RESY 256
-#endif
+// #define RESX WINX
+// #define RESY WINY
+#define RESX 848
+#define RESY 480
 
 void update_camera(void);
 
@@ -42,20 +39,11 @@ Model floor_model, diablo, cannon, ship;
 
 double delta_time;
 
-Color sample_texture(Image texture, float u, float v)
-{
-    if (texture.pixels == NULL) return WHITE;
-    int x = u * (texture.width - 1);
-    int y = (1.0f - v) * (texture.height - 1);
-    return JC_PIXEL(texture, x, y);
-}
-
-bool model_shader(Color *out, Vertex in, void *uniforms)
+bool model_shader(Vec4 *out, Vertex in, void *uniforms)
 {
     Uniforms *u = uniforms;
-    *out = in.color;
-    *out = color_mul(*out, sample_texture(u->diffuse, in.texcoord.x, in.texcoord.y));
-    *out = color_mul(*out, sample_texture(u->rough, in.texcoord.x, in.texcoord.y));
+    *out = vec4_mul(*out, image_sample(u->diffuse, in.texcoord.x, in.texcoord.y));
+    *out = vec4_mul(*out, image_sample(u->rough, in.texcoord.x, in.texcoord.y));
     return true;
 }
 
@@ -76,7 +64,6 @@ SDL_AppResult SDL_AppIterate(void *state)
     draw_model(diablo, (Vec3){0}, WHITE);
     draw_model(ship, (Vec3){ -4, -1, 0 }, WHITE);
     draw_model(floor_model, (Vec3){0}, WHITE);
-    draw_model_wires(floor_model, (Vec3){0}, GREEN);
     end_mode_3d();
 
     Rect src = { 0, 0, image.width, image.height };
@@ -170,12 +157,12 @@ Model create_floor(const char *path)
     Model model = {0};
     Vertex *v = malloc(6*sizeof(Vertex));
     float scale = 10.0f;
-    v[0] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0,     .y = scale }, {0}, RED };
-    v[1] = (Vertex){ .position = {  1, 0,  1 }, { .x = scale, .y = 0     }, {0}, GREEN };
-    v[2] = (Vertex){ .position = {  1, 0, -1 }, { .x = scale, .y = scale }, {0}, BLUE };
-    v[3] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0,     .y = scale }, {0}, RED };
-    v[4] = (Vertex){ .position = { -1, 0,  1 }, { .x = 0,     .y = 0     }, {0}, BLUE };
-    v[5] = (Vertex){ .position = {  1, 0,  1 }, { .x = scale, .y = 0     }, {0}, GREEN };
+    v[0] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0,     .y = scale }, {0}, colorf(RED)   };
+    v[1] = (Vertex){ .position = {  1, 0,  1 }, { .x = scale, .y = 0     }, {0}, colorf(GREEN) };
+    v[2] = (Vertex){ .position = {  1, 0, -1 }, { .x = scale, .y = scale }, {0}, colorf(BLUE)  };
+    v[3] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0,     .y = scale }, {0}, colorf(RED)   };
+    v[4] = (Vertex){ .position = { -1, 0,  1 }, { .x = 0,     .y = 0     }, {0}, colorf(BLUE)  };
+    v[5] = (Vertex){ .position = {  1, 0,  1 }, { .x = scale, .y = 0     }, {0}, colorf(GREEN) };
     
     model.vertices = v;
     model.vertex_count = 6;
