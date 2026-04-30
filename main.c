@@ -169,18 +169,19 @@ Model create_floor(const char *path)
 {
     Model model = {0};
     Vertex *v = malloc(6*sizeof(Vertex));
-    v[0] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0, .y = 1 }, {0}, RED };
-    v[1] = (Vertex){ .position = {  1, 0,  1 }, { .x = 1, .y = 0 }, {0}, GREEN };
-    v[2] = (Vertex){ .position = {  1, 0, -1 }, { .x = 1, .y = 1 }, {0}, BLUE };
-    v[3] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0, .y = 1 }, {0}, RED };
-    v[4] = (Vertex){ .position = { -1, 0,  1 }, { .x = 0, .y = 0 }, {0}, GREEN };
-    v[5] = (Vertex){ .position = {  1, 0,  1 }, { .x = 1, .y = 0 }, {0}, BLUE };
+    float scale = 10.0f;
+    v[0] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0,     .y = scale }, {0}, RED };
+    v[1] = (Vertex){ .position = {  1, 0,  1 }, { .x = scale, .y = 0     }, {0}, GREEN };
+    v[2] = (Vertex){ .position = {  1, 0, -1 }, { .x = scale, .y = scale }, {0}, BLUE };
+    v[3] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0,     .y = scale }, {0}, RED };
+    v[4] = (Vertex){ .position = { -1, 0,  1 }, { .x = 0,     .y = 0     }, {0}, BLUE };
+    v[5] = (Vertex){ .position = {  1, 0,  1 }, { .x = scale, .y = 0     }, {0}, GREEN };
     
     model.vertices = v;
     model.vertex_count = 6;
-    model.transform = matrix_identity();
+    model.transform = matrix_scale(scale, scale, scale);
     model.transform = matrix_mul(matrix_translate(0, -1, 0), model.transform);
-    // load_ppm(&model.texture, path);
+    load_ppm(&model.texture, path);
     return model;
 }
 
@@ -205,7 +206,7 @@ SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
     load_ppm(&cannon.texture, "res/cannon_diffuse.ppm");
 
     model_load(&ship, "res/ship-large.obj");
-    load_ppm(&ship.texture, "res/colormap_rot.ppm");
+    load_ppm(&ship.texture, "res/colormap.ppm");
     ship.transform = matrix_scale(0.3, 0.3, 0.3);
 
     floor_model = create_floor("res/floor.ppm");
