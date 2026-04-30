@@ -1,3 +1,4 @@
 main
 *.ppm
+*.blend
 !res/*.ppm

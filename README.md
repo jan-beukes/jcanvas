@@ -10,6 +10,6 @@ TODO:
 - 2d primitives
 - text
 - 3d primitives
-- qoi loading
+- qoi and mtl support for obj
 - examples
 - performace

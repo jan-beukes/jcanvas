@@ -1,5 +1,6 @@
 #define JCANVAS_IMPLEMENTATION
 #define JC_FAR_PLANE 10.0f
+#define JC_NEAR_PLANE 0.1f
 #include "jcanvas.h"
 
 #include <SDL3/SDL.h>
@@ -8,29 +9,95 @@
 
 #define FRAME_TIME (1.0 / 60.0)
 
-#define WINX 800
-#define WINY 600
+#define WINX 1280
+#define WINY 720
 
+#ifdef HIGH
 #define RESX WINX
 #define RESY WINY
+#else
+#define RESX 448
+#define RESY 256
+#endif
 
+void update_camera(void);
+
+typedef struct {
+    Image diffuse;
+    Image rough;
+} Uniforms;
+
+// State
 SDL_Window *window;
 SDL_Surface *window_surface;
 
 SDL_Surface *canvas_surface;
 float *zbuffer;
 Canvas canvas;
-Model model;
-JC_Camera camera;
-JC_Image image;
-bool render_depth;
 
+Camera camera;
+Image image;
+
+Model floor_model, diablo, cannon, ship;
+
+double delta_time;
+
+Color sample_texture(Image texture, float u, float v)
+{
+    if (texture.pixels == NULL) return WHITE;
+    int x = u * (texture.width - 1);
+    int y = (1.0f - v) * (texture.height - 1);
+    return JC_PIXEL(texture, x, y);
+}
+
+bool model_shader(Color *out, Vertex in, void *uniforms)
+{
+    Uniforms *u = uniforms;
+    *out = in.color;
+    *out = color_mul(*out, sample_texture(u->diffuse, in.texcoord.x, in.texcoord.y));
+    *out = color_mul(*out, sample_texture(u->rough, in.texcoord.x, in.texcoord.y));
+    return true;
+}
+
+SDL_AppResult SDL_AppIterate(void *state)
+{
+    (void)state;
+    static double last_frame = 0.0;
+    double time_now = (double)SDL_GetTicksNS()/SDL_NS_PER_SECOND;
+    delta_time = time_now - last_frame;
+    last_frame = time_now;
+    update_camera();
+
+    // Rendering
+    fill(canvas, BLACK);
+
+    begin_mode_3d(canvas, camera, zbuffer);
+    draw_model(cannon, (Vec3){ 1, -1, 0 }, WHITE);
+    draw_model(diablo, (Vec3){0}, WHITE);
+    draw_model(ship, (Vec3){ -4, -1, 0 }, WHITE);
+    draw_model(floor_model, (Vec3){0}, WHITE);
+    draw_model_wires(floor_model, (Vec3){0}, GREEN);
+    end_mode_3d();
+
+    Rect src = { 0, 0, image.width, image.height };
+    int size = canvas.height / 4;
+    Rect dst = { canvas.width-size, canvas.height-size, size, size };
+    blit_rect(canvas, image, dst, src);
+
+    SDL_BlitSurfaceScaled(canvas_surface, NULL, window_surface, NULL, 0);
+    SDL_UpdateWindowSurface(window);
+
+    char buf[16];
+    sprintf(buf, "%dfps", (int)(1.0/delta_time)/10*10);
+    SDL_SetWindowTitle(window, buf);
+    return SDL_APP_CONTINUE;
+}
+
+#define MOVE_VEL 2.0
 void update_camera(void)
 {
     Vec3 forward = vec3_normalize(vec3_sub(camera.target, camera.position));
     Vec3 right = vec3_normalize(vec3_cross(forward, camera.up));
-    forward = vec3_scale(forward, 0.08);
-    right = vec3_scale(right, 0.08);
 
     // Using SDL callbacks the events pumped for us
     const bool *keys = SDL_GetKeyboardState(NULL);
@@ -38,21 +105,35 @@ void update_camera(void)
     // move
     int move_dir = keys[SDL_SCANCODE_W] - keys[SDL_SCANCODE_S];
     int strafe_dir = keys[SDL_SCANCODE_D] - keys[SDL_SCANCODE_A];
-    camera.position = vec3_add(camera.position, vec3_scale(forward, move_dir));
-    camera.position = vec3_add(camera.position, vec3_scale(right, strafe_dir));
+
+    Vec3 move = { forward.x, 0, forward.z };
+    move = vec3_scale(vec3_normalize(move), move_dir*MOVE_VEL*delta_time);
+    Vec3 strafe = vec3_scale(right, strafe_dir*MOVE_VEL*delta_time);
+
+    camera.position = vec3_add(camera.position, move);
+    camera.position = vec3_add(camera.position, strafe);
     if (keys[SDL_SCANCODE_SPACE]) {
-        camera.position.y += 0.1;
-        camera.target.y += 0.1;
+        camera.position.y += MOVE_VEL*delta_time;
+        camera.target.y += MOVE_VEL*delta_time;
     } else if (keys[SDL_SCANCODE_LCTRL]) {
-        camera.position.y -= 0.1;
-        camera.target.y -= 0.1;
+        camera.position.y -= MOVE_VEL*delta_time;
+        camera.target.y -= MOVE_VEL*delta_time;
     }
 
     // look
     float dx, dy;
+    // This will be since last time we called
     SDL_GetRelativeMouseState(&dx,&dy);
     float yaw = -DEG2RAD(dx) * 0.05;
+    int yaw_dir = keys[SDL_SCANCODE_LEFT] - keys[SDL_SCANCODE_RIGHT];
+    if (yaw_dir != 0) {
+        yaw = yaw_dir * delta_time;
+    }
     float pitch = DEG2RAD(dy) * 0.05;
+    int pitch_dir = keys[SDL_SCANCODE_DOWN] - keys[SDL_SCANCODE_UP];
+    if (pitch_dir != 0) {
+        pitch = pitch_dir * delta_time;
+    }
 
     forward = vec3_transform(matrix_rotate_y(yaw), forward);
     Vec3 pitched = vec3_transform(matrix_rotate(right, pitch), forward);
@@ -64,40 +145,6 @@ void update_camera(void)
     forward = vec3_normalize(forward);
     float target_dist = vec3_length(vec3_sub(camera.target, camera.position));
     camera.target = vec3_add(camera.position, vec3_scale(forward, target_dist));
-}
-
-SDL_AppResult SDL_AppIterate(void *state)
-{
-    (void)state;
-    double frame_time_start = (double)SDL_GetTicksNS()/SDL_NS_PER_SECOND;
-    update_camera();
-
-    // Rendering
-    fill(canvas, BLACK);
-    // clear zbuffer
-    memset(zbuffer, 0, canvas.width*canvas.height*sizeof(float));
-    draw_model(canvas, camera, model, zbuffer, WHITE);
-    // draw_model_wires(canvas, camera, model, GREEN);
-
-    JC_Rect src = { 0, 0, image.width, image.height };
-    int size = canvas.height / 4;
-    JC_Rect dst = { canvas.width-size, canvas.height-size, size, size };
-    blit_rect(canvas, image, dst, src);
-
-    SDL_BlitSurfaceScaled(canvas_surface, NULL, window_surface, NULL, 0);
-    SDL_UpdateWindowSurface(window);
-
-    // Limit fps
-    double frame_time = ((double)SDL_GetTicksNS() / SDL_NS_PER_SECOND) - frame_time_start;
-    char buf[16];
-    sprintf(buf, "%dfps", (int)(1.0/frame_time)/10*10);
-    SDL_SetWindowTitle(window, buf);
-    if (frame_time < FRAME_TIME) {
-        double sleep_time = (FRAME_TIME - frame_time) * SDL_NS_PER_SECOND;
-        SDL_DelayNS(sleep_time);
-    }
-
-    return SDL_APP_CONTINUE;
 }
 
 SDL_AppResult SDL_AppEvent(void *state, SDL_Event *e)
@@ -118,6 +165,25 @@ SDL_AppResult SDL_AppEvent(void *state, SDL_Event *e)
     return SDL_APP_CONTINUE;
 }
 
+Model create_floor(const char *path)
+{
+    Model model = {0};
+    Vertex *v = malloc(6*sizeof(Vertex));
+    v[0] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0, .y = 1 }, {0}, RED };
+    v[1] = (Vertex){ .position = {  1, 0,  1 }, { .x = 1, .y = 0 }, {0}, GREEN };
+    v[2] = (Vertex){ .position = {  1, 0, -1 }, { .x = 1, .y = 1 }, {0}, BLUE };
+    v[3] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0, .y = 1 }, {0}, RED };
+    v[4] = (Vertex){ .position = { -1, 0,  1 }, { .x = 0, .y = 0 }, {0}, GREEN };
+    v[5] = (Vertex){ .position = {  1, 0,  1 }, { .x = 1, .y = 0 }, {0}, BLUE };
+    
+    model.vertices = v;
+    model.vertex_count = 6;
+    model.transform = matrix_identity();
+    model.transform = matrix_mul(matrix_translate(0, -1, 0), model.transform);
+    // load_ppm(&model.texture, path);
+    return model;
+}
+
 SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
 {
     (void)state, (void)argc, (void)argv;
@@ -130,11 +196,21 @@ SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
     canvas_create(&canvas, RESX, RESY);
     zbuffer = calloc(canvas.width*canvas.height, sizeof(float));
     canvas_surface = SDL_CreateSurfaceFrom(canvas.width, canvas.height, SDL_PIXELFORMAT_RGBA32,
-            canvas.pixels, canvas.width*sizeof(JC_Color));
+            canvas.pixels, canvas.width*sizeof(Color));
 
-    model_load(&model, "res/diablo3.obj");
-    load_ppm(&model.texture, "res/diablo3_diffuse.ppm");
-    load_ppm(&image, "horse.ppm");
+    model_load(&diablo, "res/diablo3.obj");
+    load_ppm(&diablo.texture, "res/diablo3_diffuse.ppm");
+
+    model_load(&cannon, "res/cannon.obj");
+    load_ppm(&cannon.texture, "res/cannon_diffuse.ppm");
+
+    model_load(&ship, "res/ship-large.obj");
+    load_ppm(&ship.texture, "res/colormap_rot.ppm");
+    ship.transform = matrix_scale(0.3, 0.3, 0.3);
+
+    floor_model = create_floor("res/floor.ppm");
+
+    load_ppm(&image, "res/horse.ppm");
 
     camera = (Camera){
         .position   = { 1.0f, 0.5f, 1.0f },
@@ -151,5 +227,6 @@ void SDL_AppQuit(void *state, SDL_AppResult result)
 {
     (void)result, (void)state;
     canvas_destroy(&canvas);
-    model_destroy(&model);
+    model_destroy(&diablo);
+    model_destroy(&cannon);
 }
