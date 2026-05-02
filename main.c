@@ -1,6 +1,4 @@
 #define JCANVAS_IMPLEMENTATION
-#define JC_FAR_PLANE 10.0f
-#define JC_NEAR_PLANE 0.1f
 #include "jcanvas.h"
 
 #include <SDL3/SDL.h>
@@ -14,8 +12,8 @@
 
 // #define RESX WINX
 // #define RESY WINY
-#define RESX 848
-#define RESY 480
+#define RESX 640
+#define RESY 360
 
 void update_camera(void);
 
@@ -38,6 +36,7 @@ Image image;
 Model floor_model, diablo, cannon, ship;
 
 double delta_time;
+bool fog_enabled = false;
 
 bool model_shader(Vec4 *out, Vertex in, void *uniforms)
 {
@@ -45,6 +44,24 @@ bool model_shader(Vec4 *out, Vertex in, void *uniforms)
     *out = vec4_mul(*out, image_sample(u->diffuse, in.texcoord.x, in.texcoord.y));
     *out = vec4_mul(*out, image_sample(u->rough, in.texcoord.x, in.texcoord.y));
     return true;
+}
+
+void draw_fog(void)
+{
+    Color fog_color = GRAY;
+    for (int y = 0; y < canvas.height; y++) {
+        for (int x = 0; x < canvas.width; x++) {
+            int depth_y = canvas.height - 1 - y;
+
+            float depth = 1.0f - zbuffer[depth_y*canvas.width + x];
+            float near = JC_NEAR_PLANE, far = 10;
+            depth = (2.0 * near) / (far + near - depth * (far - near));	
+            depth = 1.0f - expf(-2*depth*depth);
+            Color p = JC_PIXEL(canvas, x, y);
+            Color output = color_lerp(p, fog_color, depth);
+            JC_PIXEL(canvas, x, y) = output;
+        }
+    }
 }
 
 SDL_AppResult SDL_AppIterate(void *state)
@@ -60,10 +77,13 @@ SDL_AppResult SDL_AppIterate(void *state)
     fill(canvas, BLACK);
 
     begin_mode_3d(canvas, camera, zbuffer);
+
     draw_model(cannon, (Vec3){ 1, -1, 0 }, WHITE);
+    // draw_model_wires(cannon, (Vec3){ 1, -1, 0 }, GREEN);
     draw_model(diablo, (Vec3){0}, WHITE);
-    draw_model(ship, (Vec3){ -4, -1, 0 }, WHITE);
+    draw_model(ship, (Vec3){ -5, -3, 0 }, WHITE);
     draw_model(floor_model, (Vec3){0}, WHITE);
+    if (fog_enabled) draw_fog();
     end_mode_3d();
 
     Rect src = { 0, 0, image.width, image.height };
@@ -92,19 +112,20 @@ void update_camera(void)
     // move
     int move_dir = keys[SDL_SCANCODE_W] - keys[SDL_SCANCODE_S];
     int strafe_dir = keys[SDL_SCANCODE_D] - keys[SDL_SCANCODE_A];
+    float speed = keys[SDL_SCANCODE_LSHIFT] ? MOVE_VEL * 2 : MOVE_VEL;
 
     Vec3 move = { forward.x, 0, forward.z };
-    move = vec3_scale(vec3_normalize(move), move_dir*MOVE_VEL*delta_time);
-    Vec3 strafe = vec3_scale(right, strafe_dir*MOVE_VEL*delta_time);
+    move = vec3_scale(vec3_normalize(move), move_dir*speed*delta_time);
+    Vec3 strafe = vec3_scale(right, strafe_dir*speed*delta_time);
 
     camera.position = vec3_add(camera.position, move);
     camera.position = vec3_add(camera.position, strafe);
     if (keys[SDL_SCANCODE_SPACE]) {
-        camera.position.y += MOVE_VEL*delta_time;
-        camera.target.y += MOVE_VEL*delta_time;
+        camera.position.y += speed*delta_time;
+        camera.target.y += speed*delta_time;
     } else if (keys[SDL_SCANCODE_LCTRL]) {
-        camera.position.y -= MOVE_VEL*delta_time;
-        camera.target.y -= MOVE_VEL*delta_time;
+        camera.position.y -= speed*delta_time;
+        camera.target.y -= speed*delta_time;
     }
 
     // look
@@ -140,12 +161,17 @@ SDL_AppResult SDL_AppEvent(void *state, SDL_Event *e)
     if (e->type == SDL_EVENT_QUIT) return SDL_APP_SUCCESS;
     if (e->type == SDL_EVENT_KEY_DOWN) {
         SDL_Keycode k = e->key.key;
-        if (k == SDLK_ESCAPE) return SDL_APP_SUCCESS;
-        if (k == SDLK_TAB) {
-            int w, h;
-            SDL_GetWindowSize(window, &w, &h);
-            SDL_WarpMouseInWindow(window, w/2, h/2);
-            SDL_SetWindowRelativeMouseMode(window, !SDL_GetWindowRelativeMouseMode(window));
+        switch (k) {
+            case SDLK_ESCAPE:
+                return SDL_APP_SUCCESS;
+            case SDLK_TAB: {
+                int w, h;
+                SDL_GetWindowSize(window, &w, &h);
+                SDL_WarpMouseInWindow(window, w/2, h/2);
+                SDL_SetWindowRelativeMouseMode(window, !SDL_GetWindowRelativeMouseMode(window));
+            } break;
+            case SDLK_F:
+                fog_enabled = !fog_enabled;
         }
     }
 
@@ -157,11 +183,11 @@ Model create_floor(const char *path)
     Model model = {0};
     Vertex *v = malloc(6*sizeof(Vertex));
     float scale = 10.0f;
-    v[0] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0,     .y = scale }, {0}, colorf(RED)   };
+    v[0] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0,     .y = scale }, {0}, colorf(RED) };
     v[1] = (Vertex){ .position = {  1, 0,  1 }, { .x = scale, .y = 0     }, {0}, colorf(GREEN) };
-    v[2] = (Vertex){ .position = {  1, 0, -1 }, { .x = scale, .y = scale }, {0}, colorf(BLUE)  };
-    v[3] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0,     .y = scale }, {0}, colorf(RED)   };
-    v[4] = (Vertex){ .position = { -1, 0,  1 }, { .x = 0,     .y = 0     }, {0}, colorf(BLUE)  };
+    v[2] = (Vertex){ .position = {  1, 0, -1 }, { .x = scale, .y = scale }, {0}, colorf(BLUE) };
+    v[3] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0,     .y = scale }, {0}, colorf(RED) };
+    v[4] = (Vertex){ .position = { -1, 0,  1 }, { .x = 0,     .y = 0     }, {0}, colorf(BLUE) };
     v[5] = (Vertex){ .position = {  1, 0,  1 }, { .x = scale, .y = 0     }, {0}, colorf(GREEN) };
     
     model.vertices = v;
