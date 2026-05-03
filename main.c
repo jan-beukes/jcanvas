@@ -6,45 +6,40 @@
 #include <SDL3/SDL_main.h>
 
 #define FRAME_TIME (1.0 / 60.0)
+#define GRAVITY 9.8f
+#define PLAYER_HEIGHT 1.8f
 
 #define WINX 1280
 #define WINY 720
 
 // #define RESX WINX
 // #define RESY WINY
-#define RESX 640
-#define RESY 360
+#define RESX 426
+#define RESY 240
 
-void update_camera(void);
+void update_player(void);
 
-typedef struct {
-    Image diffuse;
-    Image rough;
-} Uniforms;
-
-// State
+// STATE
 SDL_Window *window;
 SDL_Surface *window_surface;
-
 SDL_Surface *canvas_surface;
+
 float *zbuffer;
 Canvas canvas;
 
-Camera camera;
-Image image;
+Model building;
+Model floor_model, diablo, cannon;
 
-Model floor_model, diablo, cannon, ship;
-
-double delta_time;
 bool fog_enabled = false;
+double delta_time;
 
-bool model_shader(Vec4 *out, Vertex in, void *uniforms)
-{
-    Uniforms *u = uniforms;
-    *out = vec4_mul(*out, image_sample(u->diffuse, in.texcoord.x, in.texcoord.y));
-    *out = vec4_mul(*out, image_sample(u->rough, in.texcoord.x, in.texcoord.y));
-    return true;
-}
+Camera camera;
+struct {
+    Vec3 pos;
+    Vec3 vel;
+    Vec3 look_dir;
+    bool flying;
+} player;
 
 void draw_fog(void)
 {
@@ -71,25 +66,29 @@ SDL_AppResult SDL_AppIterate(void *state)
     double time_now = (double)SDL_GetTicksNS()/SDL_NS_PER_SECOND;
     delta_time = time_now - last_frame;
     last_frame = time_now;
-    update_camera();
+    update_player();
+
+    static float rotation = 0.0f;
+    rotation += delta_time;
 
     // Rendering
-    fill(canvas, BLACK);
-
+    camera.position = vec3_add(player.pos, (Vec3){ 0, PLAYER_HEIGHT, 0 });
+    camera.target = vec3_add(camera.position, player.look_dir);
     begin_mode_3d(canvas, camera, zbuffer);
 
-    draw_model(cannon, (Vec3){ 1, -1, 0 }, WHITE);
+    fill(canvas, BLACK);
+    // draw_model(cannon, (Vec3){ 1, -1, 0 }, WHITE);
     // draw_model_wires(cannon, (Vec3){ 1, -1, 0 }, GREEN);
-    draw_model(diablo, (Vec3){0}, WHITE);
-    draw_model(ship, (Vec3){ -5, -3, 0 }, WHITE);
+    for (int i = 0; i < 3; i++) {
+        diablo.transform = matrix_rotate_y(rotation);
+        draw_model(diablo, (Vec3){ -2 + 2*i, 1, 0 }, WHITE);
+    }
     draw_model(floor_model, (Vec3){0}, WHITE);
+    disable_backface_culling();
+    draw_model(building, (Vec3){0}, WHITE);
+    enable_backface_culling();
     if (fog_enabled) draw_fog();
     end_mode_3d();
-
-    Rect src = { 0, 0, image.width, image.height };
-    int size = canvas.height / 4;
-    Rect dst = { canvas.width-size, canvas.height-size, size, size };
-    blit_rect(canvas, image, dst, src);
 
     SDL_BlitSurfaceScaled(canvas_surface, NULL, window_surface, NULL, 0);
     SDL_UpdateWindowSurface(window);
@@ -100,59 +99,67 @@ SDL_AppResult SDL_AppIterate(void *state)
     return SDL_APP_CONTINUE;
 }
 
-#define MOVE_VEL 2.0
-void update_camera(void)
+#define MOVE_VEL 4.0
+void update_player(void)
 {
-    Vec3 forward = vec3_normalize(vec3_sub(camera.target, camera.position));
-    Vec3 right = vec3_normalize(vec3_cross(forward, camera.up));
+    Vec3 right = vec3_normalize(vec3_cross(player.look_dir, camera.up));
 
     // Using SDL callbacks the events pumped for us
     const bool *keys = SDL_GetKeyboardState(NULL);
 
     // move
-    int move_dir = keys[SDL_SCANCODE_W] - keys[SDL_SCANCODE_S];
+    int forward_dir = keys[SDL_SCANCODE_W] - keys[SDL_SCANCODE_S];
     int strafe_dir = keys[SDL_SCANCODE_D] - keys[SDL_SCANCODE_A];
     float speed = keys[SDL_SCANCODE_LSHIFT] ? MOVE_VEL * 2 : MOVE_VEL;
 
-    Vec3 move = { forward.x, 0, forward.z };
-    move = vec3_scale(vec3_normalize(move), move_dir*speed*delta_time);
-    Vec3 strafe = vec3_scale(right, strafe_dir*speed*delta_time);
+    Vec3 move = { forward_dir*player.look_dir.x, 0, forward_dir*player.look_dir.z };
+    move = vec3_normalize(vec3_add(move, vec3_scale(right, strafe_dir)));
+    move = vec3_scale(move, speed*delta_time);
 
-    camera.position = vec3_add(camera.position, move);
-    camera.position = vec3_add(camera.position, strafe);
-    if (keys[SDL_SCANCODE_SPACE]) {
-        camera.position.y += speed*delta_time;
-        camera.target.y += speed*delta_time;
-    } else if (keys[SDL_SCANCODE_LCTRL]) {
-        camera.position.y -= speed*delta_time;
-        camera.target.y -= speed*delta_time;
+    player.pos = vec3_add(player.pos, move);
+    if (player.flying) {
+        if (keys[SDL_SCANCODE_SPACE]) {
+            player.pos.y += speed*delta_time;
+        } else if (keys[SDL_SCANCODE_LCTRL]) {
+            player.pos.y -= speed*delta_time;
+        }
+        player.vel.y = 0.0f;
+    } else {
+
+        if (player.pos.y > 0) {
+            player.vel.y -= GRAVITY * delta_time;
+        } else {
+            player.vel.y = 0.0f;
+            if (keys[SDL_SCANCODE_SPACE]) {
+                player.vel.y = 5.0f;
+            }
+        }
     }
+    player.pos = vec3_add(player.pos, vec3_scale(player.vel, delta_time));
 
     // look
     float dx, dy;
     // This will be since last time we called
     SDL_GetRelativeMouseState(&dx,&dy);
     float yaw = -DEG2RAD(dx) * 0.05;
-    int yaw_dir = keys[SDL_SCANCODE_LEFT] - keys[SDL_SCANCODE_RIGHT];
-    if (yaw_dir != 0) {
+    float pitch = DEG2RAD(dy) * 0.05;
+    // keyboard
+    if (yaw == 0.0f) {
+        int yaw_dir = keys[SDL_SCANCODE_LEFT] - keys[SDL_SCANCODE_RIGHT];
         yaw = yaw_dir * delta_time;
     }
-    float pitch = DEG2RAD(dy) * 0.05;
-    int pitch_dir = keys[SDL_SCANCODE_DOWN] - keys[SDL_SCANCODE_UP];
-    if (pitch_dir != 0) {
+    if (pitch == 0.0f) {
+        int pitch_dir = keys[SDL_SCANCODE_DOWN] - keys[SDL_SCANCODE_UP];
         pitch = pitch_dir * delta_time;
     }
 
-    forward = vec3_transform(matrix_rotate_y(yaw), forward);
-    Vec3 pitched = vec3_transform(matrix_rotate(right, pitch), forward);
+    player.look_dir = vec3_transform(matrix_rotate_y(yaw), player.look_dir);
+    Vec3 pitched = vec3_transform(matrix_rotate(right, pitch), player.look_dir);
     float angle = RAD2DEG(vec3_angle(camera.up, pitched));
     if (angle > 5 && angle < 175) {
-        forward = pitched;
+        player.look_dir = pitched;
     }
-
-    forward = vec3_normalize(forward);
-    float target_dist = vec3_length(vec3_sub(camera.target, camera.position));
-    camera.target = vec3_add(camera.position, vec3_scale(forward, target_dist));
+    player.look_dir = vec3_normalize(player.look_dir);
 }
 
 SDL_AppResult SDL_AppEvent(void *state, SDL_Event *e)
@@ -170,8 +177,18 @@ SDL_AppResult SDL_AppEvent(void *state, SDL_Event *e)
                 SDL_WarpMouseInWindow(window, w/2, h/2);
                 SDL_SetWindowRelativeMouseMode(window, !SDL_GetWindowRelativeMouseMode(window));
             } break;
+            case SDLK_C:
+                player.flying = !player.flying;
+                break;
             case SDLK_F:
                 fog_enabled = !fog_enabled;
+                break;
+            case SDLK_P:
+                // print out state information
+                SDL_Log("Player:");
+                SDL_Log("\tpos  = { %.2f, %.2f, %.2f }", player.pos.x, player.pos.y, player.pos.z);
+                SDL_Log("\tlook = { %.2f, %.2f, %.2f }", player.look_dir.x, player.look_dir.y, player.look_dir.z);
+                break;
         }
     }
 
@@ -181,19 +198,20 @@ SDL_AppResult SDL_AppEvent(void *state, SDL_Event *e)
 Model create_floor(const char *path)
 {
     Model model = {0};
-    Vertex *v = malloc(6*sizeof(Vertex));
-    float scale = 10.0f;
-    v[0] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0,     .y = scale }, {0}, colorf(RED) };
-    v[1] = (Vertex){ .position = {  1, 0,  1 }, { .x = scale, .y = 0     }, {0}, colorf(GREEN) };
-    v[2] = (Vertex){ .position = {  1, 0, -1 }, { .x = scale, .y = scale }, {0}, colorf(BLUE) };
-    v[3] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0,     .y = scale }, {0}, colorf(RED) };
-    v[4] = (Vertex){ .position = { -1, 0,  1 }, { .x = 0,     .y = 0     }, {0}, colorf(BLUE) };
-    v[5] = (Vertex){ .position = {  1, 0,  1 }, { .x = scale, .y = 0     }, {0}, colorf(GREEN) };
+    Vertex *verts = malloc(6*sizeof(Vertex));
+    float width = 25.0f, length = 20.0f;
+    float u = 0.1f*width, v = 0.1f*length;
+    Vec4 white = colorf(WHITE);
+    verts[0] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0, .y = v }, {0}, white };
+    verts[1] = (Vertex){ .position = {  1, 0,  1 }, { .x = u, .y = 0 }, {0}, white };
+    verts[2] = (Vertex){ .position = {  1, 0, -1 }, { .x = u, .y = v }, {0}, white };
+    verts[3] = (Vertex){ .position = { -1, 0, -1 }, { .x = 0, .y = v }, {0}, white };
+    verts[4] = (Vertex){ .position = { -1, 0,  1 }, { .x = 0, .y = 0 }, {0}, white };
+    verts[5] = (Vertex){ .position = {  1, 0,  1 }, { .x = u, .y = 0 }, {0}, white };
     
-    model.vertices = v;
+    model.vertices = verts;
     model.vertex_count = 6;
-    model.transform = matrix_scale(scale, scale, scale);
-    model.transform = matrix_mul(matrix_translate(0, -1, 0), model.transform);
+    model.transform = matrix_scale(width, 0, length);
     load_ppm(&model.texture, path);
     return model;
 }
@@ -204,8 +222,8 @@ SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
 
     window = SDL_CreateWindow("jcanvas", WINX, WINY, 0);
     if (window == NULL) return SDL_APP_FAILURE;
-    SDL_SetWindowRelativeMouseMode(window, true);
     window_surface = SDL_GetWindowSurface(window);
+    SDL_SetWindowRelativeMouseMode(window, true);
 
     canvas_create(&canvas, RESX, RESY);
     zbuffer = calloc(canvas.width*canvas.height, sizeof(float));
@@ -218,21 +236,17 @@ SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
     model_load(&cannon, "res/cannon.obj");
     load_ppm(&cannon.texture, "res/cannon_diffuse.ppm");
 
-    model_load(&ship, "res/ship-large.obj");
-    load_ppm(&ship.texture, "res/colormap.ppm");
-    ship.transform = matrix_scale(0.3, 0.3, 0.3);
+    model_load(&building, "res/building.obj");
+    load_ppm(&building.texture, "res/building.ppm");
 
     floor_model = create_floor("res/floor.ppm");
 
-    load_ppm(&image, "res/horse.ppm");
-
-    camera = (Camera){
-        .position   = { 1.0f, 0.5f, 1.0f },
-        .target     = { 0.0f, 0.0f, 0.0f },
-        .up         = { 0.0f, 1.0f, 0.0f },
-        .fov        = DEG2RAD(60),
-        .projection = PERSPECTIVE,
-    };
+    // Player
+    player.pos = (Vec3){ -18.28, 0.0f, 2.81 };
+    player.look_dir = vec3_scale(vec3_normalize(player.pos), -1);
+    camera.up = (Vec3){ 0, 1, 0 };
+    camera.fov = DEG2RAD(60);
+    camera.projection = PERSPECTIVE;
 
     return SDL_APP_CONTINUE;
 }

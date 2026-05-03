@@ -15,7 +15,7 @@
 #ifndef JCANVAS_H
 #define JCANVAS_H
 
-// TODO: Customizable math functions, alloc functions and maybe assert?
+// TODO: Customizable math and alloc functions
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -80,8 +80,9 @@ typedef struct {
     int width, height;
     JC_Color *pixels;
     int stride; // number of bytes per row
+
     // This is for filtering and wraping
-    // see JC_ImageFlags
+    // see JC_Filter and JC_Wrap
     int flags;
 } JC_Canvas;
 
@@ -121,6 +122,7 @@ typedef struct {
 } JC_Rect;
 
 // You can change these
+// TODO: maybe use runtime values that can be set with jc_set_near_plane or something
 #ifndef JC_NEAR_PLANE
 #define JC_NEAR_PLANE 0.1f
 #endif
@@ -142,6 +144,7 @@ typedef struct {
 } JC_Camera;
 
 // The faces are currently only triangles
+// TODO: support models with multiple meshes/materials by allocating a mesh per material used
 typedef struct {
     JC_Vertex *vertices;
     int vertex_count;
@@ -168,8 +171,8 @@ extern "C" {
 
 bool jc_canvas_create(JC_Canvas *canvas, int width, int height);
 JC_Canvas jc_subcanvas(JC_Canvas canvas, int x, int y, int w, int h);
-void jc_canvas_destroy(JC_Canvas *canvas);
 void jc_canvas_resize(JC_Canvas *canvas, int w, int h);
+void jc_canvas_destroy(JC_Canvas *canvas);
 
 // These are currently the only image loading functions provided
 // If you want to load an image then you can simply load the data using something like stb_image
@@ -188,52 +191,62 @@ bool jc_model_load(JC_Model *model, const char *path);
 bool jc_model_load_from_memory(JC_Model *model, char *data, long size);
 void jc_model_destroy(JC_Model *model);
 
+//=====2D drawing=====
 // These functions are used to draw another canvas/image to a canvas
 void jc_blit(JC_Canvas canvas, JC_Image image, int x, int y);
 // Like cv_blit but it scales the image so that it occupies the rectangle (x, y, w, h)
 void jc_blit_rect(JC_Canvas canvas, JC_Image image, JC_Rect dst, JC_Rect src);
 
-// TODO: vector argument functions?
+// TODO: vector and rect argument functions?
 void jc_fill(JC_Canvas canvas, JC_Color color);
 void jc_draw_rect(JC_Canvas canvas, int x, int y, int w, int h, JC_Color color);
 void jc_draw_line(JC_Canvas canvas, int ax, int ay, int bx, int by, JC_Color color);
 void jc_draw_triangle(JC_Canvas canvas, int ax, int ay, int bx, int by, int cx, int cy, JC_Color color);
 
-// 3D rendering
-// This stores the canvas, camera and zbuffer internally and also clears the zbuffer
+// This sets the canvas, camera and zbuffer to be used for 3d rendering functions 
+// it also clears the zbuffer
 void jc_begin_mode_3d(JC_Canvas canvas, JC_Camera camera, float *zbuffer);
 void jc_end_mode_3d(void);
+
+// disable backface culling when rasterizing triangles
+void jc_disable_backface_culling(void);
+void jc_enable_backface_culling(void);
 
 // If you want to disable any writes to the zbuffer
 void jc_disable_depth(void);
 void jc_enable_depth(void);
 
-// The shader func is only called in the rasterize functions
+// The shader func is only called in the rasterize function
 void jc_set_shader(JC_ShaderFunc func, void *uniforms);
 void jc_set_shader_uniforms(void *uniforms);
 void jc_unset_shader(void);
+
+// Samples an image at the given uv coordinate. UV coordinates have y up so this function will flip y to
+// read the correct value from the image
 JC_Vec4 jc_image_sample(JC_Image image, float u, float v);
 
 // This is the main rasterization function called to draw triangles. Input is vertices after
 // projection onto the screen. Y will be up so this function flips y.
 void jc_rasterize_triangle(JC_Canvas canvas, float *zbuffer, JC_Vertex v1, JC_Vertex v2, JC_Vertex v3, JC_Image texture);
 
+//=====3D drawing=====
 // These are the function used to dispatch a render. They are used by all the 3d drawing functions
 // The zbuffer is what is used for depth testing so make sure to use the same one for the entire scene
-// It should be of size width*height and initialized and cleared to zero (after projection z is in [0, 1]).
+// It should be of size width*height and initialized and cleared to zero (after projection z is in [1, 0]).
 void jc_render_geometry(JC_Canvas canvas, JC_Vertex *vertices, int vertex_count, JC_Matrix mvp,
         JC_Image texture, JC_Color color, float *zbuffer);
 void jc_render_geometry_lines(JC_Canvas canvas, JC_Vertex *vertices, int vertex_count,
         JC_Matrix mvp, JC_Color color, float *zbuffer);
 
-double jc_signed_triangle_area(float ax, float ay, float bx, float by, float cx, float cy);
 void jc_draw_model(JC_Model model, JC_Vec3 position, JC_Color color);
 void jc_draw_model_wires(JC_Model model, JC_Vec3 position, JC_Color color);
 
+double jc_signed_triangle_area(float ax, float ay, float bx, float by, float cx, float cy);
 int jc_clip_triangle(JC_Vertex v[6], JC_Vec4 clip[6]);
 JC_Vertex jc_vertex_to_ndc(JC_Vertex v, JC_Vec4 clip);
 JC_Vertex jc_barycentric_interpolate(JC_Vertex v1, JC_Vertex v2, JC_Vertex v3, float alpha, float beta, float gamma);
 
+//======Color=========
 // the integer is assumed RGBA with R being the big end
 JC_Color jc_color_from_int(uint32_t color);
 JC_Color jc_colorb(JC_Vec4 v);
@@ -243,7 +256,7 @@ JC_Color jc_color_mul(JC_Color a, JC_Color b);
 JC_Color jc_color_scale(JC_Color a, float s);
 JC_Color jc_color_lerp(JC_Color a, JC_Color b, float t);
 
-//==========Math Functions========
+//===Math Functions===
 #define JC_DEG2RAD(x) (M_PI * x / 180)
 #define JC_RAD2DEG(x) (180 * x / M_PI)
 #define JC_MIN(x, y) ((x) < (y) ? (x) : (y))
@@ -312,8 +325,9 @@ JC_Matrix jc_matrix_mul(JC_Matrix a, JC_Matrix b);
 static struct {
     bool mode_3d_active;
     bool depth_disabled;
+    bool backface_culling_disabled; 
     JC_Canvas canvas;
-    JC_Matrix view_proj; // this is instead of camera
+    JC_Matrix view_proj; // this stored instead of camera
     float *zbuffer;
     JC_ShaderFunc active_shader;
     void *active_shader_uniforms;
@@ -378,7 +392,7 @@ void jc_canvas_resize(JC_Canvas *canvas, int w, int h)
     canvas->height = h;
 }
 
-char *_read_entire_file(const char *path, long *size)
+static char *_read_entire_file(const char *path, long *size)
 {
     FILE *file = fopen(path, "rb");
     if (file == NULL) {
@@ -732,7 +746,6 @@ void jc_draw_triangle(JC_Canvas canvas, int ax, int ay, int bx, int by, int cx, 
     }
 }
 
-//-----3D state management-----
 void jc_begin_mode_3d(JC_Canvas canvas, JC_Camera camera, float *zbuffer)
 {
     if (zbuffer == NULL || canvas.pixels == NULL) return;
@@ -766,15 +779,10 @@ void jc_end_mode_3d(void)
     _jc_state.zbuffer = NULL;
 }
 
-void jc_disable_depth(void)
-{
-    _jc_state.depth_disabled = true;
-}
-
-void jc_enable_depth(void)
-{
-    _jc_state.depth_disabled = false;
-}
+void jc_disable_depth(void) { _jc_state.depth_disabled = true; }
+void jc_enable_depth(void) { _jc_state.depth_disabled = false; }
+void jc_disable_backface_culling(void) { _jc_state.backface_culling_disabled = true; }
+void jc_enable_backface_culling(void) { _jc_state.backface_culling_disabled = false; }
 
 void jc_set_shader(JC_ShaderFunc func, void *uniforms)
 {
@@ -875,7 +883,7 @@ void jc_rasterize_triangle(JC_Canvas canvas, float *zbuffer, JC_Vertex v1, JC_Ve
     JC_CLAMP(canvas, bb_maxx, bb_maxy);
 
     double total_area = jc_signed_triangle_area(ax, ay, bx, by, cx, cy);
-    if (total_area < 0.05) return;
+    if (!_jc_state.backface_culling_disabled && total_area < 0.05) return;
     bool has_texture = texture.pixels != NULL;
 
     for (int x = bb_minx; x <= bb_maxx; x++) {
@@ -1000,7 +1008,7 @@ void jc_draw_model(JC_Model model, JC_Vec3 position, JC_Color color)
     JC_Matrix view_proj = _jc_state.view_proj;
 
     JC_Matrix translate = jc_matrix_translate(position.x, position.y, position.z);
-    JC_Matrix mat_model = jc_matrix_mul(model.transform, translate);
+    JC_Matrix mat_model = jc_matrix_mul(translate, model.transform);
     JC_Matrix mvp = jc_matrix_mul(view_proj, mat_model);
     jc_render_geometry(canvas, model.vertices, model.vertex_count, mvp, model.texture, color, zbuffer);
 }
@@ -1671,6 +1679,8 @@ JC_Matrix jc_matrix_mul(JC_Matrix a, JC_Matrix b)
 #define end_mode_3d jc_end_mode_3d
 #define disable_depth jc_disable_depth
 #define enable_depth jc_enable_depth
+#define disable_backface_culling jc_disable_backface_culling
+#define enable_backface_culling jc_enable_backface_culling
 #define set_shader jc_set_shader
 #define unset_shader jc_unset_shader
 #define set_shader_uniforms jc_set_shader_uniforms
