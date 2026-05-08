@@ -24,8 +24,8 @@ void update_player(void);
 
 // STATE
 SDL_Window *window;
-SDL_Surface *window_surface;
-SDL_Surface *canvas_surface;
+SDL_Renderer *renderer;
+SDL_Texture *canvas_texture;
 
 float *zbuffer;
 Canvas canvas;
@@ -61,9 +61,9 @@ typedef struct {
 #define LIGHT_ATTENUATION 2.0f
 #define AMBIENT (Vec4){ 0.3f, 0.2f, 0.2f, 1.0f }
 Light lights[LIGHT_COUNT] = {
-    { { -10, 3, 0 }, 50.0f, { 0.9f, 1.0f, 0.9f, 1.0f } },
+    { { -10, 4, 0 }, 30.0f, { 0.9f, 1.0f, 0.9f, 1.0f } },
     { { 0,   3, 0 }, 50.0f, { 1.0f, 0.9f, 0.9f, 1.0f } },
-    { { 10,  3, 0 }, 50.0f, { 0.9f, 0.9f, 1.0f, 1.0f } },
+    { { 10,  2, 0 }, 60.0f, { 0.9f, 0.9f, 1.0f, 1.0f } },
 };
 
 bool shader(Vec4 *out, Vertex in, Vec3 pos, void *uniforms)
@@ -141,8 +141,8 @@ SDL_AppResult SDL_AppIterate(void *state)
         }
     }
 
-    set_shader_uniforms(&cannon.texture);
-    draw_model(cannon, (Vec3){ 1, 0, 0 }, WHITE);
+    // set_shader_uniforms(&cannon.texture);
+    // draw_model(cannon, (Vec3){ 1, 0, 0 }, WHITE);
 
     set_shader_uniforms(&floor_model.texture);
     draw_model(floor_model, (Vec3){0}, WHITE);
@@ -161,8 +161,10 @@ SDL_AppResult SDL_AppIterate(void *state)
     if (fog_enabled) draw_fog();
     end_mode_3d();
 
-    SDL_BlitSurfaceScaled(canvas_surface, NULL, window_surface, NULL, 0);
-    SDL_UpdateWindowSurface(window);
+    // Draw canvas to screen
+    SDL_UpdateTexture(canvas_texture, NULL, canvas.pixels, canvas.stride*sizeof(*canvas.pixels));
+    SDL_RenderTexture(renderer, canvas_texture, NULL, NULL);
+    SDL_RenderPresent(renderer);
 
     char buf[16];
     sprintf(buf, "%dfps", (int)(1.0/delta_time));
@@ -236,6 +238,7 @@ SDL_AppResult SDL_AppEvent(void *state, SDL_Event *e)
 {
     (void)state;
     if (e->type == SDL_EVENT_QUIT) return SDL_APP_SUCCESS;
+
     if (e->type == SDL_EVENT_KEY_DOWN) {
         SDL_Keycode k = e->key.key;
         switch (k) {
@@ -291,15 +294,19 @@ SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
 {
     (void)state, (void)argc, (void)argv;
 
-    window = SDL_CreateWindow("jcanvas", WINX, WINY, 0);
+    window = SDL_CreateWindow("jcanvas", WINX, WINY, SDL_WINDOW_RESIZABLE);
     if (window == NULL) return SDL_APP_FAILURE;
-    window_surface = SDL_GetWindowSurface(window);
+    renderer = SDL_CreateRenderer(window, NULL);
+    if (renderer == NULL) return SDL_APP_FAILURE;
     SDL_SetWindowRelativeMouseMode(window, true);
+    float aspect = (float)WINX/WINY;
+    SDL_SetWindowAspectRatio(window, aspect, aspect);
 
     canvas_create(&canvas, RESX, RESY);
     zbuffer = calloc(canvas.width*canvas.height, sizeof(float));
-    canvas_surface = SDL_CreateSurfaceFrom(canvas.width, canvas.height, SDL_PIXELFORMAT_RGBA32,
-            canvas.pixels, canvas.width*sizeof(Color));
+    canvas_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, RESX, RESY);
+    SDL_SetTextureScaleMode(canvas_texture, SDL_SCALEMODE_NEAREST);
+
 
     model_load(&diablo, "res/diablo3.obj");
     load_ppm(&diablo.texture, "res/diablo3_diffuse.ppm");
