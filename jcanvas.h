@@ -1,5 +1,5 @@
-// jcanvas is a simple software rendering library for drawing into a pixel buffer
-// Most of the rendering techniques were learned from the amazing series https://haqr.eu/tinyrenderer
+// jcanvas is a software rendering library for drawing into a pixel buffer. It supports both 2d and 3d rendering
+// Many of the initial rendering techniques were learned from the amazing series https://haqr.eu/tinyrenderer
 // Raylib source code was also used as a reference for many different things https://github.com/raysan5/raylib
 //
 // This is an STB style single header library.
@@ -69,7 +69,7 @@ enum JC_Wrap {
 };
 
 enum JC_Filter {
-    JC_FILTER_NEREAST,
+    JC_FILTER_NEAREST,
     JC_FILTER_BILINEAR,
 };
 
@@ -142,14 +142,27 @@ typedef struct {
 } JC_Camera;
 
 // The faces are currently only triangles
-// TODO: support models with multiple meshes/materials by allocating a mesh per material used
+
+#define JC_MAP_COUNT 3
+enum JC_Map {
+    JC_MAP_DIFFUSE,    // Diffuse/Albedo
+    JC_MAP_SPECULAR,   // Specular/Roughness
+    JC_MAP_REFLECTION, // Reflection/Metal
+};
+
 typedef struct {
     JC_Vertex *vertices;
     int vertex_count;
-    JC_Matrix transform;
 
-    // This is a simple diffuse texture that will be used when no shader is set
-    JC_Image texture;
+    char name[128];
+    JC_Color color;
+    JC_Image maps[JC_MAP_COUNT];
+} JC_Mesh;
+
+typedef struct {
+    JC_Mesh *meshes;
+    int mesh_count;
+    JC_Matrix transform;
 } JC_Model;
 
 typedef struct {
@@ -178,28 +191,35 @@ JC_Canvas jc_subcanvas(JC_Canvas canvas, int x, int y, int w, int h);
 void jc_canvas_resize(JC_Canvas *canvas, int w, int h);
 void jc_canvas_destroy(JC_Canvas *canvas);
 
-// These are currently the only image loading functions provided
-// If you want to load an image then you can simply load the data using something like stb_image
-// and manually initialize the canvas structure or use jc_canvas_create and fill the pixels
+#define jc_image_create  jc_canvas_create
+#define jc_subimage      jc_subcanvas
+#define jc_image_resize  jc_canvas_resize
+#define jc_image_destroy jc_canvas_destroy
+
+
+// Load an image from a file.
+// By default this will call into jc_load_ppm but if stb_image is included before this file it will
+// call into stbi_load
+bool jc_load_image(JC_Image *image, const char *path);
 bool jc_load_ppm(JC_Image *image, const char *path);
 bool jc_save_ppm(JC_Image image, const char *path);
 
-// TODO: add QOI https://github.com/phoboslab/qoi/blob/master/qoi.h
+// TODO: load_image_from_memory
+// TODO: add QOI support? https://github.com/phoboslab/qoi/blob/master/qoi.h
 // load_qoi load_qoi_from_memory and save_qoi
 
-// This is for the obj format!
-// Similar to image loading the Model object is not very complicated and you can easily use some
-// other library to load a model and then convert the vertices to JC_Vertex (or just convert to obj)
+// This is only for the obj format! If you need to load another format either import and export from blender
+// or manually load into a model struct using another library
 // NOTE: only triangulated meshes are supported.
-bool jc_model_load(JC_Model *model, const char *path);
-bool jc_model_load_from_memory(JC_Model *model, char *data, long size);
+bool jc_model_load(JC_Model *model, char *path);
+void jc_mesh_destroy(JC_Mesh *mesh);
 void jc_model_destroy(JC_Model *model);
 
 //=====2D drawing=====
 // These functions are used to draw another canvas/image to a canvas
 void jc_blit(JC_Canvas canvas, JC_Image image, int x, int y);
 // Like cv_blit but it scales the image so that it occupies the rectangle (x, y, w, h)
-void jc_blit_rect(JC_Canvas canvas, JC_Image image, JC_Rect dst, JC_Rect src);
+void jc_blit_rect(JC_Canvas canvas, JC_Image image, JC_Rect src, JC_Rect dst);
 
 // TODO: vector and rect argument functions?
 void jc_fill(JC_Canvas canvas, JC_Color color);
@@ -243,7 +263,9 @@ void jc_render_geometry_lines(JC_Canvas canvas, JC_Vertex *vertices, int vertex_
         JC_Matrix model, JC_Matrix view_proj, JC_Color color, float *zbuffer);
 
 void jc_draw_model(JC_Model model, JC_Vec3 position, JC_Color color);
+void jc_draw_mesh(JC_Mesh mesh, JC_Matrix transform, JC_Color color);
 void jc_draw_model_wires(JC_Model model, JC_Vec3 position, JC_Color color);
+void jc_draw_mesh_wires(JC_Mesh mesh, JC_Matrix transform, JC_Color color);
 
 void jc_draw_cube(JC_Vec3 position, JC_Vec3 scale, JC_Color color);
 void jc_draw_cube_wires(JC_Vec3 position, JC_Vec3 scale, JC_Color color);
@@ -349,7 +371,7 @@ static struct {
 #define da_append(da, item) \
 do { \
     if ((da)->capacity == 0) { \
-        (da)->capacity = 16; \
+        (da)->capacity = 8; \
         (da)->count = 0; \
         (da)->items = malloc((da)->capacity*sizeof((da)->items[0])); \
     } \
@@ -408,7 +430,7 @@ void jc_canvas_destroy(JC_Canvas *canvas)
     // This is a subcanvas and we cannot be certain that the pointer is a valid free
     if (canvas->width != canvas->stride) return;
     free(canvas->pixels);
-    canvas->pixels = NULL;
+    memset(canvas, 0, sizeof(JC_Canvas));
 }
 
 void jc_canvas_resize(JC_Canvas *canvas, int w, int h)
@@ -419,7 +441,7 @@ void jc_canvas_resize(JC_Canvas *canvas, int w, int h)
     canvas->height = h;
 }
 
-static char *_read_entire_file(const char *path, long *size)
+static char *_jc_read_entire_file(const char *path, long *size)
 {
     FILE *file = fopen(path, "rb");
     if (file == NULL) {
@@ -440,12 +462,37 @@ static char *_read_entire_file(const char *path, long *size)
     return buf;
 }
 
+// If stb_image is included this will make use of that
+bool jc_load_image(JC_Canvas *image, const char *path)
+{
+#ifdef STBI_INCLUDE_STB_IMAGE_H
+    memset(image, 0, sizeof(JC_Canvas));
+    int x, y, nchannels;
+    unsigned char *data = stbi_load(path, &x, &y, &nchannels, 4);
+    if (data == NULL) {
+        fprintf(stderr, "Error: Could not load image '%s'\n", path);
+        return false;
+    }
+    image->width = x;
+    image->height = y;
+    image->stride = image->width;
+    image->pixels = (JC_Color *)data;
+    return true;
+#else
+    if (!jc_load_ppm(image, path)) {
+        fprintf(stderr, "Error: Could not load image '%s'\n", path);
+        return false;
+    }
+#endif
+    return true;
+}
+
 // load a ppm file
 bool jc_load_ppm(JC_Canvas *image, const char *path)
 {
     memset(image, 0, sizeof(JC_Canvas));
     long size;
-    char *data = _read_entire_file(path, &size);
+    char *data = _jc_read_entire_file(path, &size);
     if (data == NULL) return false;
 
     char *b = data;
@@ -502,10 +549,13 @@ bool jc_load_ppm(JC_Canvas *image, const char *path)
     return true;
 }
 
+
+
 bool jc_save_ppm(JC_Canvas image, const char *path)
 {
     FILE *f = fopen(path, "wb");
     if (f == NULL) {
+        fprintf(stderr, "Could not save image '%s'\n", path);
         return false;
     }
     fprintf(f, "P6\n");
@@ -520,31 +570,176 @@ bool jc_save_ppm(JC_Canvas image, const char *path)
     return true;
 }
 
-struct vec3_array {
+typedef struct {
     JC_Vec3 *items;
     int count;
     int capacity;
-};
+} JC_Vec3Array;
 
-struct vertex_array {
+typedef struct {
+    JC_Mesh *items;
+    int count;
+    int capacity;
+} JC_MeshArray;
+
+typedef struct {
     JC_Vertex *items;
     int count;
     int capacity;
-};
+} JC_VertexArray;
 
-bool jc_model_load_from_memory(JC_Model *model, char *data, long size)
+static bool _jc_load_image_from_mtl_line(JC_Image *image, char *line, char *basepath)
 {
+    // Maps will have bunch of options so we are just skipping them to get the texture
+    char path_buf[2048] = {0};
+    char *s = &line[strlen(line)-1];
+    while (!isspace(*s)) s--;
+    s++;
+    char *sep;
+#ifdef _WIN32
+    sep = "\\";
+#else
+    sep = "/";
+#endif
+    char *sep_loc = strchr(s, '\\');
+    if (sep_loc != NULL) *sep_loc = *sep;
+
+    strcpy(path_buf, basepath);
+    strcat(path_buf, sep);
+    strcat(path_buf, s);
+    return jc_load_image(image, path_buf);
+}
+
+static bool _jc_parse_mtllib(JC_MeshArray *meshes, const char *path, char *basepath)
+{
+    long size;
+    char *data = _jc_read_entire_file(path, &size);
+    if (data == NULL) return false;
+
     char *line;
     char *ptr = data;
-    struct vec3_array positions = {0};
-    struct vec3_array texcoords = {0};
-    struct vec3_array normals = {0};
-    struct vertex_array vertices = {0};
+
+    JC_Mesh *mesh = NULL;
     while((line = strtok_r(ptr, "\r\n", &ptr))) {
-        char type[16];
+        char type[32];
         sscanf(line, "%s", type);
         if (strcmp(type, "#") == 0) continue;
+        // skip type
+        char *s = line;
+        while((s - data < size) && isspace(*s)) s++;
+        while ((s - data < size) && !isspace(*s)) s++;
+        if (strcmp(type, "newmtl") == 0) {
+            JC_Mesh m = {0};
+            m.color = WHITE;
+            sscanf(s, "%127s", m.name);
+            da_append(meshes, m);
+            mesh = &meshes->items[meshes->count-1];
+        } else if (strcmp(type, "Kd") == 0 || strcmp(type, "Ka") == 0) {
+            float r, g, b;
+            sscanf(s, "%f %f %f", &r, &g, &b);
+            mesh->color.r = r * 255;
+            mesh->color.g = g * 255;
+            mesh->color.b = b * 255;
+            mesh->color.a = 255;
+        } else if (strcmp(type, "map_Kd") == 0 || strcmp(type, "map_Ka") == 0) {
+            JC_Image *image = &mesh->maps[JC_MAP_DIFFUSE];
+            if (!_jc_load_image_from_mtl_line(image, s, basepath)) goto fail;
 
+        } else if (strcmp(type, "map_Ns") == 0) {
+            JC_Image *image = &mesh->maps[JC_MAP_SPECULAR];
+            if (!_jc_load_image_from_mtl_line(image, s, basepath)) goto fail;
+        } else if (strcmp(type, "map_Refl") == 0 || strcmp(type, "map_refl") == 0 || strcmp(type, "refl") == 0) {
+            JC_Image *image = &mesh->maps[JC_MAP_REFLECTION];
+            if (!_jc_load_image_from_mtl_line(image, s, basepath)) goto fail;
+        }
+        // NOTE: Supporting bump/normal maps would require having vertex tangents and the TBN matrix applied to the
+        // normal read from the normal/bump map https://learnopengl.com/Advanced-Lighting/Normal-Mapping
+    }
+    return true;
+
+fail:
+    for (int i = 0; i < meshes->count; i++) {
+        for (int j = 0; j < JC_MAP_COUNT; j++) {
+            jc_image_destroy(&meshes->items[i].maps[j]);
+        }
+    }
+    free(meshes->items);
+    memset(meshes, 0, sizeof(JC_MeshArray));
+    return false;
+}
+
+static char *_jc_basename(char *path)
+{
+    size_t path_size = strlen(path);
+    char *end = &path[path_size-1];
+    char sep = '/';
+#ifdef _WIN32
+    sep = '\\';
+#endif
+    while (end > path && *end != sep) end--;
+    if (end == path) return path;
+
+    size_t base_size = end - path;
+    char *basepath = calloc(base_size+1, 1);
+    strncpy(basepath, path, base_size);
+    return basepath;
+}
+
+bool jc_model_load(JC_Model *model, char *path)
+{
+    long size;
+    char *data = _jc_read_entire_file(path, &size);
+    if (data == NULL) {
+        fprintf(stderr, "Could not load model '%s'\n", path);
+        return false;
+    }
+
+    JC_Vec3Array positions = {0};
+    JC_Vec3Array texcoords = {0};
+    JC_Vec3Array normals = {0};
+    JC_VertexArray vertices = {0};
+    JC_MeshArray meshes = {0};
+
+    // Try to load mtllib
+    JC_Mesh default_mesh = {0};
+    strcpy(default_mesh.name, "default");
+    default_mesh.color = WHITE;
+    char *mtllib = strstr(data, "mtllib");
+    if (mtllib != NULL) {
+        while (!isspace(*mtllib)) mtllib++;
+        char mtlname[256] = {0};
+        sscanf(mtllib, "%s", mtlname);
+
+        char *basepath = _jc_basename(path);
+        size_t mtlpath_size = strlen(basepath) + 1 + strlen(mtlname) + 1;
+        char *mtlpath = calloc(mtlpath_size, 1);
+        strcpy(mtlpath, basepath);
+#ifdef _WIN32
+        strcat(mtlpath, "\\");
+#else
+        strcat(mtlpath, "/");
+#endif
+        strcat(mtlpath, mtlname);
+        if (!_jc_parse_mtllib(&meshes, mtlpath, basepath)) {
+            fprintf(stderr, "Could not load mtllib '%s'\n", mtlpath);
+            da_append(&meshes, default_mesh);
+        }
+
+        free(mtlpath);
+        free(basepath);
+    } else {
+        da_append(&meshes, default_mesh);
+    }
+
+    char *line;
+    char *ptr = data;
+    JC_Mesh *active_mesh = &meshes.items[0];
+    while((line = strtok_r(ptr, "\r\n", &ptr))) {
+        char type[32] = {0};
+        sscanf(line, "%31s", type);
+        if (strcmp(type, "#") == 0) continue;
+
+        // skip type
         char *s = line;
         while((s - data < size) && isspace(*s)) s++;
         while ((s - data < size) && !isspace(*s)) s++;
@@ -597,36 +792,63 @@ bool jc_model_load_from_memory(JC_Model *model, char *data, long size)
                 s = end + 1;
                 da_append(&vertices, vertex);
             }
-        } else {
-            // TODO: handle other things https://en.wikipedia.org/wiki/Wavefront_.obj_file
+        } else if (strcmp(type, "usemtl") == 0) {
+            if (vertices.count == 0) continue;
+            char name[128] = {0};
+            sscanf(s, "%127s", name);
+
+            // Just keep using the same mesh
+            if (strcmp(name, active_mesh->name) == 0) continue;
+
+            // flush vertices into the active mesh
+            active_mesh->vertex_count = vertices.count;
+            active_mesh->vertices = realloc(vertices.items, vertices.count * sizeof(JC_Vertex));
+            memset(&vertices, 0, sizeof(JC_VertexArray));
+            JC_Mesh *mesh = NULL;
+            for (int i = 0; i < meshes.count; i++) {
+                if (strcmp(meshes.items[i].name, name) == 0) {
+                    mesh = &meshes.items[i];
+                }
+            }
+            if (mesh != NULL) active_mesh = mesh;
         }
+        // TODO: handle other things https://en.wikipedia.org/wiki/Wavefront_.obj_file
     }
     free(positions.items);
     free(texcoords.items);
     free(normals.items);
 
+    if (vertices.count > 0) {
+        // flush any vertices into active mesh
+        active_mesh->vertex_count = vertices.count;
+        active_mesh->vertices = realloc(vertices.items, vertices.count * sizeof(JC_Vertex));
+        memset(&vertices, 0, sizeof(JC_VertexArray));
+    }
     memset(model, 0, sizeof(*model));
-    model->vertex_count = vertices.count;
-    model->vertices = realloc(vertices.items, model->vertex_count * sizeof(JC_Vertex));
+    model->mesh_count = meshes.count;
+    model->meshes = realloc(meshes.items, model->mesh_count * sizeof(JC_Mesh));
     model->transform = jc_matrix_identity();
+
+    free(data);
     return true;
 }
 
-bool jc_model_load(JC_Model *model, const char *path)
+void jc_mesh_destroy(JC_Mesh *mesh)
 {
-    long size;
-    char *data = _read_entire_file(path, &size);
-    if (data == NULL) return false;
-    bool result = jc_model_load_from_memory(model, data, size);
-    free(data);
-    return result;
+    free(mesh->vertices);
+    for (int i = 0; i < JC_MAP_COUNT; i++) {
+        jc_image_destroy(&mesh->maps[i]);
+    }
+    memset(mesh, 0, sizeof(JC_Mesh));
 }
 
 void jc_model_destroy(JC_Model *model)
 {
-    free(model->vertices);
-    model->vertices = NULL;
-    jc_canvas_destroy(&model->texture);
+    for (int i = 0; i < model->mesh_count; i++) {
+        jc_mesh_destroy(&model->meshes[i]);
+    }
+    free(model->meshes);
+    memset(model, 0, sizeof(JC_Model));
 }
 
 //===============================================
@@ -655,7 +877,7 @@ void jc_blit(JC_Canvas canvas, JC_Image image, int x, int y)
 }
 
 // TODO: Texture filtering
-void jc_blit_rect(JC_Canvas canvas, JC_Image image, JC_Rect dst, JC_Rect src)
+void jc_blit_rect(JC_Canvas canvas, JC_Image image, JC_Rect src, JC_Rect dst)
 {
     if ((dst.x < 0 && dst.x+dst.w < 0) || (dst.x >= canvas.width && dst.x+dst.w >= canvas.width)) return;
     if ((dst.y < 0 && dst.y+dst.h < 0) || (dst.y >= canvas.height && dst.y+dst.h >= canvas.height)) return;
@@ -840,13 +1062,8 @@ void jc_set_shader_uniforms(void *uniforms)
     _jc_state.active_shader_uniforms = uniforms;
 }
 
-JC_Vec4 jc_image_sample(JC_Image image, float u, float v)
-{
+static JC_Color jc_image_pixel_wrapped(JC_Image image, int x, int y) {
     int wrap = JC_IMAGE_WRAP(image.flags);
-    // TODO: filtering
-    // int filtering = JC_IMAGE_FILTER(image.flags);
-    int x = u * (image.width - 1);
-    int y = (1.0f - v) * (image.height - 1);
     switch (wrap) {
         case JC_WRAP_REPEAT:
             x = ((x % image.width) + image.width) % image.width;
@@ -855,11 +1072,38 @@ JC_Vec4 jc_image_sample(JC_Image image, float u, float v)
         case JC_WRAP_CLAMP:
             JC_CLAMP(image, x, y);
             break;
-        default:
-            assert(false && "Invalid wrap");
     }
-    JC_Color out = JC_PIXEL(image, x, y);
-    return jc_colorf(out);
+    return JC_PIXEL(image, x, y);
+}
+
+JC_Vec4 jc_image_sample(JC_Image image, float u, float v) {
+    int filtering = JC_IMAGE_FILTER(image.flags);
+    float tx = u * (image.width - 1);
+    float ty = (1.0f - v) * (image.height - 1);
+
+    if (filtering == JC_FILTER_BILINEAR) {
+        int x0 = floorf(tx);
+        int y0 = floorf(ty);
+        int x1 = x0 + 1;
+        int y1 = y0 + 1;
+
+        float sx = tx - (float)x0;
+        float sy = ty - (float)y0;
+
+        JC_Vec4 p00 = jc_colorf(jc_image_pixel_wrapped(image, x0, y0));
+        JC_Vec4 p10 = jc_colorf(jc_image_pixel_wrapped(image, x1, y0));
+        JC_Vec4 p01 = jc_colorf(jc_image_pixel_wrapped(image, x0, y1));
+        JC_Vec4 p11 = jc_colorf(jc_image_pixel_wrapped(image, x1, y1));
+
+        JC_Vec4 top = jc_vec4_lerp(p00, p10, sx);
+        JC_Vec4 bot = jc_vec4_lerp(p01, p11, sx);
+
+        return jc_vec4_lerp(top, bot, sy);
+    }
+
+    int x = (int)roundf(tx);
+    int y = (int)roundf(ty);
+    return jc_colorf(jc_image_pixel_wrapped(image, x, y));
 }
 
 void jc_rasterize_line(JC_Canvas canvas, float *zbuffer, JC_Vec3 p1, JC_Vec3 p2, JC_Color color)
@@ -971,7 +1215,9 @@ void jc_rasterize_triangle(JC_Canvas canvas, float *zbuffer, JC_Triangle triangl
             if (!discard) {
                 if (!_jc_state.depth_disabled) *zptr = z;
                 // NOTE: here we flip to the screen
-                JC_PIXEL(canvas, x, (canvas.height-1) - y) = jc_colorb(out);
+                JC_Color pixel_color = JC_PIXEL(canvas, x, (canvas.height-1) - y);
+                JC_Color blended = jc_color_blend_alpha(pixel_color, jc_colorb(out));
+                JC_PIXEL(canvas, x, (canvas.height-1) - y) = blended;
             }
         }
     }
@@ -1059,18 +1305,36 @@ void jc_render_geometry_lines(JC_Canvas canvas, JC_Vertex *vertices, int vertex_
     }
 }
 
+void jc_draw_mesh(JC_Mesh mesh, JC_Matrix transform, JC_Color color)
+{
+    JC_Matrix view_proj = _jc_state.view_proj;
+
+    JC_Canvas canvas = _jc_state.canvas;
+    float *zbuffer = _jc_state.zbuffer;
+    JC_Color mesh_color = jc_color_mul(mesh.color, color);
+    jc_render_geometry(canvas, mesh.vertices, mesh.vertex_count, transform, view_proj,
+            mesh.maps[0], mesh_color, zbuffer);
+}
+
 void jc_draw_model(JC_Model model, JC_Vec3 position, JC_Color color)
 {
     if (!_jc_state.mode_3d_active) return;
 
-    JC_Canvas canvas = _jc_state.canvas;
-    float *zbuffer = _jc_state.zbuffer;
-
-    JC_Matrix view_proj = _jc_state.view_proj;
     JC_Matrix translate = jc_matrix_translate(position.x, position.y, position.z);
     JC_Matrix mat_model = jc_matrix_mul(translate, model.transform);
-    jc_render_geometry(canvas, model.vertices, model.vertex_count, mat_model, view_proj,
-            model.texture, color, zbuffer);
+    for (int i = 0; i < model.mesh_count; i++) {
+        JC_Mesh mesh = model.meshes[i];
+        jc_draw_mesh(mesh, mat_model, color);
+    }
+}
+
+void jc_draw_mesh_wires(JC_Mesh mesh, JC_Matrix transform, JC_Color color)
+{
+    JC_Matrix view_proj = _jc_state.view_proj;
+
+    JC_Canvas canvas = _jc_state.canvas;
+    float *zbuffer = _jc_state.zbuffer;
+    jc_render_geometry_lines(canvas, mesh.vertices, mesh.vertex_count, transform, view_proj, color, zbuffer);
 }
 
 // NOTE: This does not use any of the vertex colors or the model texture
@@ -1078,13 +1342,12 @@ void jc_draw_model_wires(JC_Model model, JC_Vec3 position, JC_Color color)
 {
     if (!_jc_state.mode_3d_active) return;
 
-    JC_Canvas canvas = _jc_state.canvas;
-    float *zbuffer = _jc_state.zbuffer;
-
-    JC_Matrix view_proj = _jc_state.view_proj;
     JC_Matrix translate = jc_matrix_translate(position.x, position.y, position.z);
     JC_Matrix mat_model = jc_matrix_mul(translate, model.transform);
-    jc_render_geometry_lines(canvas, model.vertices, model.vertex_count, mat_model, view_proj, color, zbuffer);
+    for (int i = 0; i < model.mesh_count; i++) {
+        JC_Mesh mesh = model.meshes[i];
+        jc_draw_mesh_wires(mesh, mat_model, color);
+    }
 }
 
 void jc_set_cube_vertices(JC_Vertex *v)
@@ -1936,10 +2199,13 @@ JC_Matrix jc_matrix_inv(JC_Matrix a)
 //======================================
 // Strip prefixes from types and functions. This idea is taken from https://github.com/tsoding/nob.h
 #ifndef JC_PREFIX
+
+// Types
 #define Canvas JC_Canvas
 #define Image JC_Image
 #define Color JC_Color
 #define Camera JC_Camera
+#define Mesh JC_Mesh
 #define Model JC_Model
 #define Vertex JC_Vertex
 #define Matrix JC_Matrix
@@ -1948,26 +2214,34 @@ JC_Matrix jc_matrix_inv(JC_Matrix a)
 #define Vec3 JC_Vec3
 #define Vec4 JC_Vec4
 
+// ENUMS
 #define PERSPECTIVE JC_PERSPECTIVE
 #define ORTHOGRAPHIC JC_ORTHOGRAPHIC
-#define FILTER_NEAREST JC_FILTER_NEREAST
+#define FILTER_NEAREST JC_FILTER_NEAREST
 #define FILTER_BILINEAR JC_FILTER_BILINEAR
 #define WRAP_REPEAT JC_WRAP_REPEAT
 #define WRAP_CLAMP JC_WRAP_CLAMP
 
-#define canvas_create jc_canvas_create
-#define image_create jc_canvas_create
-#define canvas_destroy jc_canvas_destroy
-#define image_destroy jc_canvas_destroy
-#define subcanvas jc_subcanvas
-#define subimage jc_subcanvas
-#define canvas_resize jc_canvas_resize
-#define image_resize jc_canvas_resize
+#define MAP_DIFFUSE JC_MAP_DIFFUSE
+#define MAP_SPECULAR JC_MAP_SPECULAR
+#define MAP_REFLECTION JC_MAP_REFLECTION
 
+// Functions
+#define canvas_create jc_canvas_create
+#define image_create jc_image_create
+#define canvas_destroy jc_canvas_destroy
+#define image_destroy jc_image_destroy
+#define subcanvas jc_subcanvas
+#define subimage jc_subimage
+#define canvas_resize jc_canvas_resize
+#define image_resize jc_image_resize
+
+#define load_image jc_load_image
 #define load_ppm jc_load_ppm
 #define save_ppm jc_save_ppm
+
 #define model_load jc_model_load
-#define model_load_from_memory jc_model_load_from_memory
+#define mesh_destroy jc_mesh_destroy
 #define model_destroy jc_model_destroy
 
 #define blit jc_blit
@@ -1992,7 +2266,9 @@ JC_Matrix jc_matrix_inv(JC_Matrix a)
 #define render_geometry jc_render_geometry
 #define render_geometry_lines jc_render_geometry_lines
 #define draw_model jc_draw_model
+#define draw_mesh jc_draw_mesh
 #define draw_model_wires jc_draw_model_wires
+#define draw_mesh_wires jc_draw_mesh_wires
 #define draw_cube jc_draw_cube
 #define draw_sphere jc_draw_sphere
 

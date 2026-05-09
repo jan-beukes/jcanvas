@@ -1,3 +1,4 @@
+#include "stb_image.h"
 #define JCANVAS_IMPLEMENTATION
 #include "jcanvas.h"
 
@@ -14,11 +15,10 @@
 
 // #define RESX WINX
 // #define RESY WINY
-#define RESX 640
-#define RESY 360
+#define RESX 320
+ #define RESY 180
 
 #define LIGHT_COUNT 3
-#define DIABLO_COUNT 3
 
 void update_player(void);
 
@@ -31,16 +31,11 @@ float *zbuffer;
 Canvas canvas;
 
 Color white_pixel[1] = { WHITE };
-Image white_image = {
-    .pixels = white_pixel,
-    .width = 1, .height = 1,
-};
 
-Model building;
-Model floor_model, diablo, cannon;
-JC_Vec3 diablo_positions[DIABLO_COUNT];
+Model sponza, diablo;
 
 bool fog_enabled = false;
+bool shading_enabled = true;
 double delta_time;
 
 Camera camera;
@@ -55,37 +50,46 @@ struct {
 typedef struct {
     Vec3 position;
     float strength;
+    float linear;
+    float quadratic;
     Vec4 color;
-} Light;
+} PointLight;
 
-#define LIGHT_ATTENUATION 2.0f
-#define AMBIENT (Vec4){ 0.3f, 0.2f, 0.2f, 1.0f }
-Light lights[LIGHT_COUNT] = {
-    { { -10, 4, 0 }, 30.0f, { 0.9f, 1.0f, 0.9f, 1.0f } },
-    { { 0,   3, 0 }, 50.0f, { 1.0f, 0.9f, 0.9f, 1.0f } },
-    { { 10,  2, 0 }, 60.0f, { 0.9f, 0.9f, 1.0f, 1.0f } },
+#define AMBIENT (Vec4){ 0.10f, 0.08f, 0.08f, 1.0f }
+// https://wiki.ogre3d.org/tiki-index.php?page=-Point+Light+Attenuation
+PointLight lights[LIGHT_COUNT] = {
+    { { -30, 5, 0 }, 2.5f, 0.02f, 0.032f, { 0.5f, 0.5f, 1.00f, 1.0f } },
+    { { 0, 15, 0 },  1.2f,  0.02f, 0.005f, { 1.0f, 1.0f, 1.0f, 1.0f } },
+    { { 30, 5, 0 },  2.5f, 0.02f, 0.032f, { 1.0f, 0.5, 0.5f, 1.0f } },
+
 };
 
 bool shader(Vec4 *out, Vertex in, Vec3 pos, void *uniforms)
 {
-    Image *image = uniforms;
-    Vec4 img_color = image_sample(*image, in.texcoord.x, in.texcoord.y);
+    Image *maps = uniforms;
+    Vec4 img_color = in.color;
+    if (maps != NULL && maps[MAP_DIFFUSE].pixels != NULL) {
+        img_color = image_sample(maps[MAP_DIFFUSE], in.texcoord.x, in.texcoord.y);
+    }
 
     Vec3 normal = vec3_normalize(in.normal);
-    Vec4 diffuse = {0};
+    Vec4 color = vec4_mul(AMBIENT, img_color);
     for (int i = 0; i < LIGHT_COUNT; i++) {
-        Vec3 light_vec = vec3_sub(lights[i].position, pos);
-        float dist_sqr = vec3_dot(light_vec, light_vec);
+        PointLight light = lights[i];
+        Vec3 light_vec = vec3_sub(light.position, pos);
+        float dist = vec3_length(light_vec);
         float dot = vec3_dot(normal, vec3_normalize(light_vec));
         dot = MAX(dot, 0);
-        dist_sqr *= LIGHT_ATTENUATION * LIGHT_ATTENUATION;
-        float dist_inv = 1.0f / dist_sqr;
-        Vec4 l = vec4_scale(lights[i].color, dot * lights[i].strength * dist_inv);
-        diffuse = vec4_add(diffuse, l);
+        float attenuation = 1.0f / (1 + light.linear * dist + light.quadratic*dist*dist);    
+        float strength = light.strength * attenuation;
+        Vec4 l = vec4_scale(light.color, dot * strength);
+        Vec4 diffuse = vec4_mul(img_color, l);
+
+        color = vec4_add(color, diffuse);
     }
-    diffuse.w = 1.0f;
-    JC_Vec4 light = vec4_add(AMBIENT, diffuse);
-    *out = vec4_mul(light, img_color);
+    color.w = img_color.w;
+    JC_Vec4 out_color = vec4_mul(in.color, color);
+    *out = out_color;
     return true;
 }
 
@@ -117,7 +121,7 @@ SDL_AppResult SDL_AppIterate(void *state)
     update_player();
 
     static float rotation = 0.0f;
-    rotation += 0.1f*delta_time;
+    rotation += 0.4f*delta_time;
 
     // Rendering
     camera.position = vec3_add(player.pos, (Vec3){ 0, PLAYER_HEIGHT, 0 });
@@ -125,29 +129,27 @@ SDL_AppResult SDL_AppIterate(void *state)
     begin_mode_3d(canvas, camera, zbuffer);
 
     fill(canvas, colorb(AMBIENT)); 
-    set_shader(shader, &building.texture);
-    disable_backface_culling();
-    draw_model(building, (Vec3){0}, WHITE);
-    enable_backface_culling();
+    if (shading_enabled) set_shader(shader, NULL);
+    for (int i = 0; i < sponza.mesh_count; i++) {
+        Mesh mesh = sponza.meshes[i];
+        set_shader_uniforms(mesh.maps);
+        draw_mesh(mesh, sponza.transform, WHITE);
+    }
+    draw_model(sponza, (Vec3){0}, WHITE);
 
-    set_shader_uniforms(&diablo.texture);
+    set_shader_uniforms(&diablo.meshes[0].maps);
     for (int i = 0; i < LIGHT_COUNT; i++) {
         Vec3 light_xz = { lights[i].position.x, 0, lights[i].position.z };
-        for (int j = 0; j < DIABLO_COUNT; j++){
-            Vec3 pos = diablo_positions[j];
-            Matrix translate = matrix_translate(pos.x, pos.y, pos.z);
-            diablo.transform = matrix_mul(matrix_rotate_y(rotation), translate);
-            draw_model(diablo, light_xz, WHITE);
-        }
+        float radius = 3;
+        float x = radius*SDL_cosf(rotation);
+        float z = radius*SDL_sinf(rotation);
+        diablo.transform = matrix_rotate_y(-(rotation + M_PI/2));
+        diablo.transform = matrix_mul(matrix_translate(x, 1, z), diablo.transform);
+        draw_model(diablo, light_xz, WHITE);
     }
 
-    // set_shader_uniforms(&cannon.texture);
-    // draw_model(cannon, (Vec3){ 1, 0, 0 }, WHITE);
-
-    set_shader_uniforms(&floor_model.texture);
-    draw_model(floor_model, (Vec3){0}, WHITE);
     // LIGHTS
-    set_shader_uniforms(&white_image);
+    set_shader_uniforms(NULL);
     for (int i = 0; i < LIGHT_COUNT; i++) {
         Vec3 lpos = lights[i].position;
         Vec3 p = { lpos.x, 0.5*lpos.y, lpos.z };
@@ -184,6 +186,7 @@ void update_player(void)
     int forward_dir = keys[SDL_SCANCODE_W] - keys[SDL_SCANCODE_S];
     int strafe_dir = keys[SDL_SCANCODE_D] - keys[SDL_SCANCODE_A];
     float speed = keys[SDL_SCANCODE_LSHIFT] ? MOVE_VEL * 2 : MOVE_VEL;
+    if (player.flying) speed *= 2;
 
     Vec3 move = { forward_dir*player.look_dir.x, 0, forward_dir*player.look_dir.z };
     move = vec3_normalize(vec3_add(move, vec3_scale(right, strafe_dir)));
@@ -256,6 +259,9 @@ SDL_AppResult SDL_AppEvent(void *state, SDL_Event *e)
             case SDLK_F:
                 fog_enabled = !fog_enabled;
                 break;
+            case SDLK_L:
+                shading_enabled = !shading_enabled;
+                break;
             case SDLK_P:
                 // print out state information
                 SDL_Log("Player:");
@@ -263,31 +269,14 @@ SDL_AppResult SDL_AppEvent(void *state, SDL_Event *e)
                 SDL_Log("\tlook = { %.2f, %.2f, %.2f }", player.look_dir.x, player.look_dir.y, player.look_dir.z);
                 break;
         }
+    } else if (e->type == SDL_EVENT_MOUSE_WHEEL) {
+        camera.fov -= DEG2RAD(e->wheel.y);
+        camera.fov = MAX(DEG2RAD(5), camera.fov);
+        camera.fov = MIN(DEG2RAD(120), camera.fov);
+        printf("%f\n", RAD2DEG(camera.fov));
     }
 
     return SDL_APP_CONTINUE;
-}
-
-Model create_floor(const char *path)
-{
-    Model model = {0};
-    Vertex *verts = malloc(6*sizeof(Vertex));
-    float width = 25.0f, length = 20.0f;
-    float u = 0.1f*width, v = 0.1f*length;
-    Vec4 c = colorf(WHITE);
-    Vec3 n = { 0, 1, 0 };
-    verts[0] = (Vertex){ { -1, 0, -1 }, { .x = 0, .y = v }, n, c };
-    verts[1] = (Vertex){ {  1, 0,  1 }, { .x = u, .y = 0 }, n, c };
-    verts[2] = (Vertex){ {  1, 0, -1 }, { .x = u, .y = v }, n, c };
-    verts[3] = (Vertex){ { -1, 0, -1 }, { .x = 0, .y = v }, n, c };
-    verts[4] = (Vertex){ { -1, 0,  1 }, { .x = 0, .y = 0 }, n, c };
-    verts[5] = (Vertex){ {  1, 0,  1 }, { .x = u, .y = 0 }, n, c };
-    
-    model.vertices = verts;
-    model.vertex_count = 6;
-    model.transform = matrix_scale(width, 1, length);
-    load_ppm(&model.texture, path);
-    return model;
 }
 
 SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
@@ -309,15 +298,10 @@ SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
 
 
     model_load(&diablo, "res/diablo3.obj");
-    load_ppm(&diablo.texture, "res/diablo3_diffuse.ppm");
 
-    model_load(&cannon, "res/cannon.obj");
-    load_ppm(&cannon.texture, "res/cannon_diffuse.ppm");
-
-    model_load(&building, "res/building.obj");
-    load_ppm(&building.texture, "res/building.ppm");
-
-    floor_model = create_floor("res/floor.ppm");
+    model_load(&sponza, "res/sponza/sponza.obj");
+    sponza.transform = matrix_scale(0.6, 0.6, 0.6);
+    sponza.transform = matrix_mul(matrix_translate(0, 0, 1), sponza.transform);
 
     // Player
     player.pos = (Vec3){ -18.28, 0.0f, 2.81 };
@@ -327,16 +311,6 @@ SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
     camera.fov = DEG2RAD(60);
     camera.projection = PERSPECTIVE;
 
-
-    // stuff
-    float radius = 3.0f;
-    for (int i = 0; i < DIABLO_COUNT; i++) {
-        float ang = i * 2*M_PI / DIABLO_COUNT;
-        float x = radius*SDL_cosf(ang);
-        float z = radius*SDL_sin(ang);
-        diablo_positions[i] = (Vec3){ x, 1, z };
-    }
-
     return SDL_APP_CONTINUE;
 }
 
@@ -345,5 +319,4 @@ void SDL_AppQuit(void *state, SDL_AppResult result)
     (void)result, (void)state;
     canvas_destroy(&canvas);
     model_destroy(&diablo);
-    model_destroy(&cannon);
 }

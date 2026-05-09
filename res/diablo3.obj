@@ -1,6 +1,6 @@
 # Blender 5.1.1
 # www.blender.org
-mtllib diablo_low.mtl
+mtllib diablo.mtl
 o diablo3
 v 0.118812 0.706069 0.088011
 v 0.105601 0.643663 0.113593
@@ -3606,6 +3606,7 @@ vt 0.119986 0.599708
 vt 0.180291 0.739272
 vt 0.135426 0.915447
 s 1
+usemtl diablo
 f 6/1/1 5/2/2 3/3/3
 f 6/1/1 3/3/3 4/4/4
 f 8/5/5 7/6/6 1/7/7
