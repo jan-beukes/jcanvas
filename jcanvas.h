@@ -122,7 +122,7 @@ typedef struct {
 // You can change these
 // TODO: maybe use runtime values that can be set with jc_set_near_plane or something
 #ifndef JC_NEAR_PLANE
-#define JC_NEAR_PLANE 0.1f
+#define JC_NEAR_PLANE 0.2f
 #endif
 #ifndef JC_FAR_PLANE
 #define JC_FAR_PLANE 100.0f
@@ -325,6 +325,15 @@ JC_Vec3 jc_vec3_lerp(JC_Vec3 a, JC_Vec3 b, float t);
 float jc_vec3_dot(JC_Vec3 a, JC_Vec3 b);
 float jc_vec3_length(JC_Vec3 v);
 float jc_vec3_angle(JC_Vec3 a, JC_Vec3 b);
+
+JC_Vec2 jc_vec2_add(JC_Vec2 a, JC_Vec2 b);
+JC_Vec2 jc_vec2_sub(JC_Vec2 a, JC_Vec2 b);
+JC_Vec2 jc_vec2_scale(JC_Vec2 v, float s);
+JC_Vec2 jc_vec2_normalize(JC_Vec2 v);
+JC_Vec2 jc_vec2_lerp(JC_Vec2 a, JC_Vec2 b, float t);
+float jc_vec2_dot(JC_Vec2 a, JC_Vec2 b);
+float jc_vec2_cross(JC_Vec2 v1, JC_Vec2 v2);
+float jc_vec2_length(JC_Vec2 v);
 
 // TODO: Vector2 functions
 
@@ -1121,10 +1130,11 @@ void jc_rasterize_line(JC_Canvas canvas, float *zbuffer, JC_Vec3 p1, JC_Vec3 p2,
 
     float y = p1.y;
     float z = p1.z;
-    float dy = (float)(p2.y-p1.y) / (p2.x-p1.x);
-    float dz = (float)(p2.z-p1.z) / (p2.x-p1.x);
-    for (int x = p1.x; x < (int)p2.x; ++x) {
-        // since y is actually x in this case
+    float dx = p2.x - p1.x;
+    float dydx = (float)(p2.y-p1.y) / dx;
+    float dzdx = (float)(p2.z-p1.z) / dx;
+    int end = (int)p2.x;
+    for (int x = p1.x; x < end; ++x) {
         int yi = (int)y;
         if (steep) {
             if (JC_IN_BOUNDS(canvas, yi, x) && z > zbuffer[x*canvas.width + yi]) {
@@ -1140,8 +1150,8 @@ void jc_rasterize_line(JC_Canvas canvas, float *zbuffer, JC_Vec3 p1, JC_Vec3 p2,
             }
         }
         // accumulate dy
-        y += dy;
-        z += dz;
+        y += dydx;
+        z += dzdx;
     }
 }
 
@@ -1269,6 +1279,7 @@ void jc_render_geometry(JC_Canvas canvas, JC_Vertex *vertices, int vertex_count,
     }
 }
 
+// TODO: Something is majorly cooked here fr fr
 void jc_render_geometry_lines(JC_Canvas canvas, JC_Vertex *vertices, int vertex_count, JC_Matrix model,
         JC_Matrix view_proj, JC_Color color, float *zbuffer)
 {
@@ -1298,10 +1309,9 @@ void jc_render_geometry_lines(JC_Canvas canvas, JC_Vertex *vertices, int vertex_
             }
             JC_Vec3 p1 = v[3*tri].position, p2 = v[3*tri+1].position, p3 = v[3*tri+2].position;
             jc_rasterize_line(canvas, zbuffer, p1, p2, color);
-            jc_rasterize_line(canvas, zbuffer, p2, p3, color);
-            jc_rasterize_line(canvas, zbuffer, p3, p1, color);
+            if (clipped_triangles == 1 || tri == 1) jc_rasterize_line(canvas, zbuffer, p2, p3, color);
+            if (clipped_triangles == 1 || tri == 0) jc_rasterize_line(canvas, zbuffer, p3, p1, color);
         }
-
     }
 }
 
@@ -1893,6 +1903,79 @@ JC_Vec3 jc_vec3_lerp(JC_Vec3 a, JC_Vec3 b, float t)
     return v;
 }
 
+JC_Vec2 jc_vec2_add(JC_Vec2 a, JC_Vec2 b)
+{
+    JC_Vec2 v = { a.x + b.x, a.y + b.y };
+    return v;
+}
+
+JC_Vec2 jc_vec2_sub(JC_Vec2 a, JC_Vec2 b)
+{
+    JC_Vec2 v = { a.x - b.x, a.y - b.y };
+    return v;
+}
+
+JC_Vec2 jc_vec2_scale(JC_Vec2 v, float s)
+{
+    JC_Vec2 result = { v.x * s, v.y * s };
+    return result;
+}
+
+// Idk if this is usefull
+JC_Vec2 jc_vec2_transform(JC_Matrix a, JC_Vec2 v) {
+    JC_Vec2 u;
+    u.x = a.m11 * v.x + a.m12 * v.y + a.m12 + a.m14;
+    u.y = a.m21 * v.x + a.m22 * v.y + a.m22 + a.m24;
+    return u;
+}
+
+float jc_vec2_length(JC_Vec2 v)
+{
+    return sqrtf(v.x*v.x + v.y*v.y);
+}
+
+JC_Vec2 jc_vec2_normalize(JC_Vec2 v)
+{
+    float length = sqrtf(v.x*v.x + v.y*v.y);
+    if (length == 0.0f) return v;
+    v.x /= length;
+    v.y /= length;
+    return v;
+}
+
+float jc_vec2_dot(JC_Vec2 a, JC_Vec2 b)
+{
+    return a.x*b.x + a.y*b.y;
+}
+
+float jc_vec2_cross(JC_Vec2 v1, JC_Vec2 v2)
+{
+    float result = (v1.x*v2.y - v1.y*v2.x);
+    return result;
+}
+
+float jc_vec2_angle(JC_Vec2 a, JC_Vec2 b)
+{
+    float result = 0.0f;
+
+    float dot = a.x*b.x + a.y*b.y;
+    float det = a.x*b.y - a.y*b.x;
+
+    result = atan2f(det, dot);
+
+    return result;
+}
+
+JC_Vec2 jc_vec2_lerp(JC_Vec2 a, JC_Vec2 b, float t)
+{
+    JC_Vec2 v = {
+        a.x + t*(b.x - a.x),
+        a.y + t*(b.y - a.y),
+    };
+    return v;
+}
+
+
 // Matrix functions
 JC_Matrix jc_matrix_identity(void)
 {
@@ -2305,6 +2388,15 @@ JC_Matrix jc_matrix_inv(JC_Matrix a)
 #define vec3_dot jc_vec3_dot
 #define vec3_angle jc_vec3_angle
 #define vec3_length jc_vec3_length
+
+#define vec2_add jc_vec2_add
+#define vec2_sub jc_vec2_sub
+#define vec2_scale jc_vec2_scale
+#define vec2_normalize jc_vec2_normalize
+#define vec2_lerp jc_vec2_lerp
+#define vec2_dot jc_vec2_dot
+#define vec2_cross jc_vec2_cross
+#define vec2_length jc_vec2_length
 
 #define matrix_identity jc_matrix_identity
 #define matrix_view jc_matrix_view

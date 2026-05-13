@@ -1,10 +1,10 @@
-#include "stb_image.h"
-#define JCANVAS_IMPLEMENTATION
-#include "jcanvas.h"
-
 #include <SDL3/SDL.h>
 #define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL_main.h>
+#include "stb_image.h"
+
+#define JCANVAS_IMPLEMENTATION
+#include "jcanvas.h"
 
 #define FRAME_TIME (1.0 / 60.0)
 #define GRAVITY 10.0f
@@ -16,7 +16,7 @@
 // #define RESX WINX
 // #define RESY WINY
 #define RESX 320
- #define RESY 180
+#define RESY 180
 
 #define LIGHT_COUNT 3
 
@@ -29,6 +29,7 @@ SDL_Texture *canvas_texture;
 
 float *zbuffer;
 Canvas canvas;
+Canvas frame;
 
 Color white_pixel[1] = { WHITE };
 
@@ -36,6 +37,7 @@ Model sponza, diablo;
 
 bool fog_enabled = false;
 bool shading_enabled = true;
+bool magnify = false;
 double delta_time;
 
 Camera camera;
@@ -59,7 +61,7 @@ typedef struct {
 // https://wiki.ogre3d.org/tiki-index.php?page=-Point+Light+Attenuation
 PointLight lights[LIGHT_COUNT] = {
     { { -30, 5, 0 }, 2.5f, 0.02f, 0.032f, { 0.5f, 0.5f, 1.00f, 1.0f } },
-    { { 0, 15, 0 },  1.2f,  0.02f, 0.005f, { 1.0f, 1.0f, 1.0f, 1.0f } },
+    { { 0, 15, 0 },  0.5f,  0.02f, 0.005f, { 1.0f, 1.0f, 1.0f, 1.0f } },
     { { 30, 5, 0 },  2.5f, 0.02f, 0.032f, { 1.0f, 0.5, 0.5f, 1.0f } },
 
 };
@@ -67,11 +69,13 @@ PointLight lights[LIGHT_COUNT] = {
 bool shader(Vec4 *out, Vertex in, Vec3 pos, void *uniforms)
 {
     Image *maps = uniforms;
+    // sample texture
     Vec4 img_color = in.color;
     if (maps != NULL && maps[MAP_DIFFUSE].pixels != NULL) {
         img_color = image_sample(maps[MAP_DIFFUSE], in.texcoord.x, in.texcoord.y);
     }
 
+    // lighting
     Vec3 normal = vec3_normalize(in.normal);
     Vec4 color = vec4_mul(AMBIENT, img_color);
     for (int i = 0; i < LIGHT_COUNT; i++) {
@@ -89,6 +93,7 @@ bool shader(Vec4 *out, Vertex in, Vec3 pos, void *uniforms)
     }
     color.w = img_color.w;
     JC_Vec4 out_color = vec4_mul(in.color, color);
+
     *out = out_color;
     return true;
 }
@@ -111,6 +116,28 @@ void draw_fog(void)
     }
 }
 
+void apply_magnification(Canvas out, Canvas in)
+{
+    Vec2 center = { RESX/2.0f, RESY/2.0f };
+    float power = 1.0f;
+    float radius = 50.0f;
+
+    for (int y = 0; y < RESY; y++) {
+        for (int x = 0; x < RESX; x++) {
+            // scale by aspect ratio
+            Vec2 uv = { x, y };
+            float dist = vec2_length(vec2_sub(uv, center));
+            if (dist > radius) continue;
+
+            float warp = 1.0f - powf(dist / radius, power);
+            warp = MAX(0, MIN(warp, 1));
+            Vec2 delta = vec2_sub(center, uv);
+            uv = vec2_add(uv, vec2_scale(delta, warp));
+            JC_PIXEL(out, x, y) = JC_PIXEL(in, (int)uv.x, (int)uv.y);
+        }
+    }
+}
+
 SDL_AppResult SDL_AppIterate(void *state)
 {
     (void)state;
@@ -126,16 +153,15 @@ SDL_AppResult SDL_AppIterate(void *state)
     // Rendering
     camera.position = vec3_add(player.pos, (Vec3){ 0, PLAYER_HEIGHT, 0 });
     camera.target = vec3_add(camera.position, player.look_dir);
-    begin_mode_3d(canvas, camera, zbuffer);
+    begin_mode_3d(frame, camera, zbuffer);
 
-    fill(canvas, colorb(AMBIENT)); 
+    fill(frame, colorb(AMBIENT)); 
     if (shading_enabled) set_shader(shader, NULL);
     for (int i = 0; i < sponza.mesh_count; i++) {
         Mesh mesh = sponza.meshes[i];
         set_shader_uniforms(mesh.maps);
         draw_mesh(mesh, sponza.transform, WHITE);
     }
-    draw_model(sponza, (Vec3){0}, WHITE);
 
     set_shader_uniforms(&diablo.meshes[0].maps);
     for (int i = 0; i < LIGHT_COUNT; i++) {
@@ -162,6 +188,12 @@ SDL_AppResult SDL_AppIterate(void *state)
 
     if (fog_enabled) draw_fog();
     end_mode_3d();
+
+    // pos processing
+    memcpy(canvas.pixels, frame.pixels, frame.stride*frame.height*sizeof(Color));
+    if (magnify) {
+        apply_magnification(canvas, frame);
+    }
 
     // Draw canvas to screen
     SDL_UpdateTexture(canvas_texture, NULL, canvas.pixels, canvas.stride*sizeof(*canvas.pixels));
@@ -262,6 +294,9 @@ SDL_AppResult SDL_AppEvent(void *state, SDL_Event *e)
             case SDLK_L:
                 shading_enabled = !shading_enabled;
                 break;
+            case SDLK_M:
+                magnify = !magnify;
+                break;
             case SDLK_P:
                 // print out state information
                 SDL_Log("Player:");
@@ -291,7 +326,11 @@ SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
     float aspect = (float)WINX/WINY;
     SDL_SetWindowAspectRatio(window, aspect, aspect);
 
+    // screen canvas
     canvas_create(&canvas, RESX, RESY);
+    // da frame
+    canvas_create(&frame, RESX, RESY);
+
     zbuffer = calloc(canvas.width*canvas.height, sizeof(float));
     canvas_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, RESX, RESY);
     SDL_SetTextureScaleMode(canvas_texture, SDL_SCALEMODE_NEAREST);
@@ -302,6 +341,9 @@ SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
     model_load(&sponza, "res/sponza/sponza.obj");
     sponza.transform = matrix_scale(0.6, 0.6, 0.6);
     sponza.transform = matrix_mul(matrix_translate(0, 0, 1), sponza.transform);
+    // for (int i = 0; i < sponza.mesh_count; i++) {
+    //     sponza.meshes[i].maps[0].flags |= FILTER_BILINEAR;
+    // }
 
     // Player
     player.pos = (Vec3){ -18.28, 0.0f, 2.81 };
