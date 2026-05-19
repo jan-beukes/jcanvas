@@ -5,7 +5,7 @@ LIBS = -lSDL3 -lm
 SDL_INCLUDE ?=
 SDL_LIB ?=
 
-main: main.c stb_image.o
+main: main.c jcanvas.h stb_image.o
 	cc -o main $(CFLAGS) $^ $(SDL_INCLUDE) $(SDL_LIB) $(LIBS)
 
 stb_image.o: stb_image.h

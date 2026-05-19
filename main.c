@@ -57,11 +57,11 @@ typedef struct {
     Vec4 color;
 } PointLight;
 
-#define AMBIENT (Vec4){ 0.10f, 0.08f, 0.08f, 1.0f }
+#define AMBIENT (Vec4){ 0.12f, 0.1f, 0.1f, 1.0f }
 // https://wiki.ogre3d.org/tiki-index.php?page=-Point+Light+Attenuation
 PointLight lights[LIGHT_COUNT] = {
     { { -30, 5, 0 }, 2.5f, 0.02f, 0.032f, { 0.5f, 0.5f, 1.00f, 1.0f } },
-    { { 0, 15, 0 },  0.5f,  0.02f, 0.005f, { 1.0f, 1.0f, 1.0f, 1.0f } },
+    { { 0, 10, 0 },  1.0f,  0.02f, 0.005f, { 1.0f, 1.0f, 1.0f, 1.0f } },
     { { 30, 5, 0 },  2.5f, 0.02f, 0.032f, { 1.0f, 0.5, 0.5f, 1.0f } },
 
 };
@@ -74,6 +74,7 @@ bool shader(Vec4 *out, Vertex in, Vec3 pos, void *uniforms)
     if (maps != NULL && maps[MAP_DIFFUSE].pixels != NULL) {
         img_color = image_sample(maps[MAP_DIFFUSE], in.texcoord.x, in.texcoord.y);
     }
+    if (img_color.w < 0.1f) return false;
 
     // lighting
     Vec3 normal = vec3_normalize(in.normal);
@@ -101,17 +102,17 @@ bool shader(Vec4 *out, Vertex in, Vec3 pos, void *uniforms)
 void draw_fog(void)
 {
     Color fog_color = DARKGRAY;
-    for (int y = 0; y < canvas.height; y++) {
-        for (int x = 0; x < canvas.width; x++) {
-            int depth_y = canvas.height - 1 - y;
+    for (int y = 0; y < frame.height; y++) {
+        for (int x = 0; x < frame.width; x++) {
+            int depth_y = frame.height - 1 - y;
 
-            float depth = 1.0f - zbuffer[depth_y*canvas.width + x];
+            float depth = 1.0f - zbuffer[depth_y*frame.width + x];
             float near = JC_NEAR_PLANE, far = 10;
             depth = (2.0 * near) / (far + near - depth * (far - near));	
             depth = 1.0f - expf(-2*depth*depth);
-            Color p = JC_PIXEL(canvas, x, y);
+            Color p = JC_PIXEL(frame, x, y);
             Color output = color_lerp(p, fog_color, depth);
-            JC_PIXEL(canvas, x, y) = output;
+            JC_PIXEL(frame, x, y) = output;
         }
     }
 }
@@ -161,6 +162,7 @@ SDL_AppResult SDL_AppIterate(void *state)
         Mesh mesh = sponza.meshes[i];
         set_shader_uniforms(mesh.maps);
         draw_mesh(mesh, sponza.transform, WHITE);
+        // draw_mesh_wires(mesh, sponza.transform, GREEN);
     }
 
     set_shader_uniforms(&diablo.meshes[0].maps);
@@ -172,6 +174,7 @@ SDL_AppResult SDL_AppIterate(void *state)
         diablo.transform = matrix_rotate_y(-(rotation + M_PI/2));
         diablo.transform = matrix_mul(matrix_translate(x, 1, z), diablo.transform);
         draw_model(diablo, light_xz, WHITE);
+        // draw_model_wires(diablo, light_xz, GREEN);
     }
 
     // LIGHTS
@@ -308,7 +311,6 @@ SDL_AppResult SDL_AppEvent(void *state, SDL_Event *e)
         camera.fov -= DEG2RAD(e->wheel.y);
         camera.fov = MAX(DEG2RAD(5), camera.fov);
         camera.fov = MIN(DEG2RAD(120), camera.fov);
-        printf("%f\n", RAD2DEG(camera.fov));
     }
 
     return SDL_APP_CONTINUE;

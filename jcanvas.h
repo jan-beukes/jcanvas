@@ -88,6 +88,7 @@ typedef struct {
 // There are also aliases of all the jc_canvas* functions such as jc_image_create
 typedef JC_Canvas JC_Image;
 
+// TODO: Do the HMM union thing and make a vec2, vec3, vec4 constructor
 typedef struct {
     float x, y;
 } JC_Vec2;
@@ -1220,6 +1221,7 @@ void jc_rasterize_triangle(JC_Canvas canvas, float *zbuffer, JC_Triangle triangl
             } else if (has_texture) {
                 JC_Vec4 texcolor = jc_image_sample(texture, frag.texcoord.x, frag.texcoord.y);
                 out = jc_vec4_mul(out, texcolor);
+                if (texcolor.w < 0.05f) discard = true;
             }
 
             if (!discard) {
