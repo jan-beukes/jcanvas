@@ -1693,9 +1693,9 @@ JC_Vertex jc_barycentric_interpolate(JC_Vertex v1, JC_Vertex v2, JC_Vertex v3,
 JC_Color jc_color_blend_alpha(JC_Color ca, JC_Color cb)
 {
     uint32_t alpha = cb.a;
-    uint32_t r = (ca.r*(255 - alpha) + cb.r*alpha)/255;
-    uint32_t g = (ca.g*(255 - alpha) + cb.g*alpha)/255;
-    uint32_t b = (ca.b*(255 - alpha) + cb.b*alpha)/255;
+    uint32_t r = (255*cb.r + ca.r*(255-alpha))/255;
+    uint32_t g = (255*cb.g + ca.g*(255-alpha))/255;
+    uint32_t b = (255*cb.b + ca.b*(255-alpha))/255;
     if (r > 255) r = 255;
     if (g > 255) g = 255;
     if (b > 255) b = 255;

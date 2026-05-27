@@ -3,6 +3,11 @@
 #include <SDL3/SDL_main.h>
 #include "stb_image.h"
 
+#ifndef _WIN32
+#include <sys/ioctl.h>
+#include <signal.h>
+#endif
+
 #define JCANVAS_IMPLEMENTATION
 #include "jcanvas.h"
 
@@ -15,8 +20,8 @@
 
 // #define RESX WINX
 // #define RESY WINY
-#define RESX 320
-#define RESY 180
+#define RESX 640
+#define RESY 360
 
 #define LIGHT_COUNT 3
 
@@ -24,12 +29,14 @@ void update_player(void);
 
 // STATE
 SDL_Window *window;
+SDL_Gamepad *gamepad;
 SDL_Renderer *renderer;
 SDL_Texture *canvas_texture;
 
 float *zbuffer;
 Canvas canvas;
 Canvas frame;
+int resx, resy;
 
 Color white_pixel[1] = { WHITE };
 
@@ -38,6 +45,7 @@ Model sponza, diablo;
 bool fog_enabled = false;
 bool shading_enabled = true;
 bool magnify = false;
+bool terminal = false;
 double delta_time;
 
 Camera camera;
@@ -117,14 +125,27 @@ void draw_fog(void)
     }
 }
 
+void terminal_render(Canvas canvas)
+{
+    printf("\033[H");
+    for (int y = 0; y < canvas.height; ++y) {
+        for (int x = 0; x < canvas.width; ++x) {
+            Color col = JC_PIXEL(canvas, x, y);
+            printf("\033[48;2;%d;%d;%dm  ", col.r, col.g, col.b);
+        }
+        printf("\n");
+    }
+    printf("\033[m]");
+}
+
 void apply_magnification(Canvas out, Canvas in)
 {
-    Vec2 center = { RESX/2.0f, RESY/2.0f };
+    Vec2 center = { resx/2.0f, resy/2.0f };
     float power = 1.0f;
     float radius = 50.0f;
 
-    for (int y = 0; y < RESY; y++) {
-        for (int x = 0; x < RESX; x++) {
+    for (int y = 0; y < resy; y++) {
+        for (int x = 0; x < resx; x++) {
             // scale by aspect ratio
             Vec2 uv = { x, y };
             float dist = vec2_length(vec2_sub(uv, center));
@@ -199,39 +220,53 @@ SDL_AppResult SDL_AppIterate(void *state)
     }
 
     // Draw canvas to screen
-    SDL_UpdateTexture(canvas_texture, NULL, canvas.pixels, canvas.stride*sizeof(*canvas.pixels));
-    SDL_RenderTexture(renderer, canvas_texture, NULL, NULL);
-    SDL_RenderPresent(renderer);
+    if (!terminal) {
+        SDL_UpdateTexture(canvas_texture, NULL, canvas.pixels, canvas.stride*sizeof(*canvas.pixels));
+        SDL_RenderTexture(renderer, canvas_texture, NULL, NULL);
+        SDL_RenderPresent(renderer);
 
-    char buf[16];
-    sprintf(buf, "%dfps", (int)(1.0/delta_time));
-    SDL_SetWindowTitle(window, buf);
+        char buf[16];
+        sprintf(buf, "%dfps", (int)(1.0/delta_time));
+        SDL_SetWindowTitle(window, buf);
+    } else {
+        terminal_render(canvas);
+    }
     return SDL_APP_CONTINUE;
 }
 
 #define MOVE_VEL 4.0
+#define DEADZONE 0.1f
 void update_player(void)
 {
     Vec3 right = vec3_normalize(vec3_cross(player.look_dir, camera.up));
 
     // Using SDL callbacks the events pumped for us
     const bool *keys = SDL_GetKeyboardState(NULL);
-
     // move
-    int forward_dir = keys[SDL_SCANCODE_W] - keys[SDL_SCANCODE_S];
-    int strafe_dir = keys[SDL_SCANCODE_D] - keys[SDL_SCANCODE_A];
-    float speed = keys[SDL_SCANCODE_LSHIFT] ? MOVE_VEL * 2 : MOVE_VEL;
+    float forward = 0.0f, strafe = 0.0f;
+    float speed = MOVE_VEL;
+    if (gamepad) {
+        forward = -(float)SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY) / SDL_MAX_SINT16;
+        strafe = (float)SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) / SDL_MAX_SINT16;
+        forward = ABS(forward) < DEADZONE ? 0.0f : forward;
+        strafe = ABS(strafe) < DEADZONE ? 0.0f : strafe;
+        if (SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_LEFT_STICK))
+            speed *= 2;
+    } else {
+        forward = keys[SDL_SCANCODE_W] - keys[SDL_SCANCODE_S];
+        strafe = keys[SDL_SCANCODE_D] - keys[SDL_SCANCODE_A];
+        if (keys[SDL_SCANCODE_LSHIFT]) speed *= 2;
+    }
     if (player.flying) speed *= 2;
 
-    Vec3 move = { forward_dir*player.look_dir.x, 0, forward_dir*player.look_dir.z };
-    move = vec3_normalize(vec3_add(move, vec3_scale(right, strafe_dir)));
+    Vec3 move = { forward*player.look_dir.x, 0, forward*player.look_dir.z };
+    move = vec3_normalize(vec3_add(move, vec3_scale(right, strafe)));
     move = vec3_scale(move, speed*delta_time);
-
     player.pos = vec3_add(player.pos, move);
     if (player.flying) {
-        if (keys[SDL_SCANCODE_SPACE]) {
+        if (keys[SDL_SCANCODE_SPACE] || SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_SOUTH)) {
             player.pos.y += speed*delta_time;
-        } else if (keys[SDL_SCANCODE_LCTRL]) {
+        } else if (keys[SDL_SCANCODE_LCTRL] || SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_EAST)) {
             player.pos.y -= speed*delta_time;
         }
         player.vel.y = 0.0f;
@@ -240,7 +275,7 @@ void update_player(void)
             player.vel.y -= GRAVITY * delta_time;
         } else {
             player.vel.y = 0.0f;
-            if (keys[SDL_SCANCODE_SPACE]) {
+            if (keys[SDL_SCANCODE_SPACE] || SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_SOUTH)) {
                 player.vel.y = 5.0f;
             }
         }
@@ -248,19 +283,30 @@ void update_player(void)
     player.pos = vec3_add(player.pos, vec3_scale(player.vel, delta_time));
 
     // look
-    float dx, dy;
-    // This will be since last time we called
-    SDL_GetRelativeMouseState(&dx,&dy);
-    float yaw = -DEG2RAD(dx) * 0.05;
-    float pitch = DEG2RAD(dy) * 0.05;
-    // keyboard
-    if (yaw == 0.0f) {
-        int yaw_dir = keys[SDL_SCANCODE_LEFT] - keys[SDL_SCANCODE_RIGHT];
-        yaw = yaw_dir * delta_time;
-    }
-    if (pitch == 0.0f) {
-        int pitch_dir = keys[SDL_SCANCODE_DOWN] - keys[SDL_SCANCODE_UP];
-        pitch = pitch_dir * delta_time;
+    float yaw = 0.0f, pitch = 0.0f;
+    if (gamepad) {
+        yaw = -(float)SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTX) / SDL_MAX_SINT16;
+        pitch = (float)SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTY) / SDL_MAX_SINT16;
+        yaw = ABS(yaw) < DEADZONE ? 0.0f : yaw;
+        pitch = ABS(pitch) < DEADZONE ? 0.0f : pitch;
+
+        yaw = yaw * delta_time * 2;
+        pitch = pitch * delta_time * 2;
+    } else {
+        float dx, dy;
+        // This will be since last time we called
+        SDL_GetRelativeMouseState(&dx,&dy);
+        yaw = -DEG2RAD(dx) * 0.05;
+        pitch = DEG2RAD(dy) * 0.05;
+        // keyboard
+        if (yaw == 0.0f) {
+            int yaw_dir = keys[SDL_SCANCODE_LEFT] - keys[SDL_SCANCODE_RIGHT];
+            yaw = yaw_dir * delta_time;
+        }
+        if (pitch == 0.0f) {
+            int pitch_dir = keys[SDL_SCANCODE_DOWN] - keys[SDL_SCANCODE_UP];
+            pitch = pitch_dir * delta_time;
+        }
     }
 
     player.look_dir = vec3_transform(matrix_rotate_y(yaw), player.look_dir);
@@ -300,43 +346,92 @@ SDL_AppResult SDL_AppEvent(void *state, SDL_Event *e)
             case SDLK_M:
                 magnify = !magnify;
                 break;
-            case SDLK_P:
-                // print out state information
-                SDL_Log("Player:");
-                SDL_Log("\tpos  = { %.2f, %.2f, %.2f }", player.pos.x, player.pos.y, player.pos.z);
-                SDL_Log("\tlook = { %.2f, %.2f, %.2f }", player.look_dir.x, player.look_dir.y, player.look_dir.z);
+            default:
+                break;
+        }
+    } else if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+        switch (e->gbutton.button) {
+            case SDL_GAMEPAD_BUTTON_WEST:
+                player.flying = !player.flying;
+                break;
+            case SDL_GAMEPAD_BUTTON_NORTH:
+                shading_enabled = !shading_enabled;
+                break;
+            default:
                 break;
         }
     } else if (e->type == SDL_EVENT_MOUSE_WHEEL) {
         camera.fov -= DEG2RAD(e->wheel.y);
         camera.fov = MAX(DEG2RAD(5), camera.fov);
         camera.fov = MIN(DEG2RAD(120), camera.fov);
+    } else if (e->type == SDL_EVENT_GAMEPAD_ADDED) {
+        if (gamepad == NULL) {
+            gamepad = SDL_OpenGamepad(e->gdevice.which);
+        }
+    } else if (e->type == SDL_EVENT_GAMEPAD_REMOVED) {
+        if (gamepad && (SDL_GetGamepadID(gamepad) == e->gdevice.which)) {
+            SDL_CloseGamepad(gamepad);
+            gamepad = NULL;
+        }
     }
 
     return SDL_APP_CONTINUE;
+}
+
+void reset_and_exit(int sig)
+{
+    (void)sig;
+    // show cursor
+    printf("\033[?25h");
+    printf("\033[2J");
+    exit(0);
 }
 
 SDL_AppResult SDL_AppInit(void **state, int argc, char *argv[])
 {
     (void)state, (void)argc, (void)argv;
 
-    window = SDL_CreateWindow("jcanvas", WINX, WINY, SDL_WINDOW_RESIZABLE);
-    if (window == NULL) return SDL_APP_FAILURE;
-    renderer = SDL_CreateRenderer(window, NULL);
-    if (renderer == NULL) return SDL_APP_FAILURE;
-    SDL_SetWindowRelativeMouseMode(window, true);
-    float aspect = (float)WINX/WINY;
-    SDL_SetWindowAspectRatio(window, aspect, aspect);
+    SDL_InitFlags init_flags = SDL_INIT_GAMEPAD;
+    if (argc > 1 && SDL_strcmp(argv[1], "term") == 0) {
+        terminal = true;
+        init_flags |= SDL_INIT_VIDEO;
+    }
+    SDL_Init(init_flags);
+
+    if (terminal) {
+#ifdef _WIN32
+        resx = 45;
+        resy = 25;
+#else
+        struct winsize size;
+        ioctl(1, TIOCGWINSZ, &size);
+        resy = size.ws_row - 1;
+        resx = resy * 4 / 3;
+
+        signal(SIGINT, reset_and_exit);
+        // Hide cursor and clear screen
+        printf("\033[?25l");
+        printf("\033[2J");
+#endif
+    } else {
+        resx = RESX, resy = RESY;
+        window = SDL_CreateWindow("jcanvas", WINX, WINY, SDL_WINDOW_RESIZABLE);
+        if (window == NULL) return SDL_APP_FAILURE;
+        renderer = SDL_CreateRenderer(window, NULL);
+        if (renderer == NULL) return SDL_APP_FAILURE;
+        SDL_SetWindowRelativeMouseMode(window, true);
+        float aspect = (float)WINX/WINY;
+        SDL_SetWindowAspectRatio(window, aspect, aspect);
+
+        canvas_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, resx, resy);
+        SDL_SetTextureScaleMode(canvas_texture, SDL_SCALEMODE_NEAREST);
+    }
 
     // screen canvas
-    canvas_create(&canvas, RESX, RESY);
+    canvas_create(&canvas, resx, resy);
     // da frame
-    canvas_create(&frame, RESX, RESY);
-
+    canvas_create(&frame, resx, resy);
     zbuffer = calloc(canvas.width*canvas.height, sizeof(float));
-    canvas_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, RESX, RESY);
-    SDL_SetTextureScaleMode(canvas_texture, SDL_SCALEMODE_NEAREST);
-
 
     model_load(&diablo, "res/diablo3.obj");
 
@@ -363,4 +458,10 @@ void SDL_AppQuit(void *state, SDL_AppResult result)
     (void)result, (void)state;
     canvas_destroy(&canvas);
     model_destroy(&diablo);
+
+    if (terminal) {
+        // show cursor
+        printf("\033[?25h");
+        printf("\033[2J");
+    }
 }

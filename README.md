@@ -1,12 +1,11 @@
 # JCANVAS
 
-***WIP***
+Simple software rendering library.
+This should not be used for anything serious.
 
-Simple software rendering library
+![](./screenshot.png)
 
-Currently examples use SDL3 https://www.libsdl.org/
+Currently the demo uses SDL3 https://www.libsdl.org/
 
 TODO:
 - text
-- qoi and mtl support for obj
-- examples
