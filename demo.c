@@ -20,8 +20,8 @@
 
 // #define RESX WINX
 // #define RESY WINY
-#define RESX 640
-#define RESY 360
+#define RESX 320
+#define RESY 180
 
 #define LIGHT_COUNT 3
 

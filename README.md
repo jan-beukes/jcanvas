@@ -2,11 +2,11 @@
 
 Simple software rendering library.
 
-This should not be used for anything serious.
+Demo using ![SDL3](https://www.libsdl.org/)
+![](./res/screenshot.png)
 
-![](./screenshot.png)
-
-Currently the demo uses ![SDL3](https://www.libsdl.org/)
+Demo using terminal escape codes
+![](./res/demo_term.webm)
 
 TODO:
 - text
